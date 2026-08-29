@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 import google.generativeai as genai
 
 st.set_page_config(page_title="台股低基期起漲量化戰情室", layout="wide")
-st.title("🎯 台股量化作戰室：低基期起漲 ＆ AI 題材儀表板 ＆ 個人持股診斷")
+st.title("🎯 台股量化作戰室：低基期起漲 ＆ AI 題材方格儀表板 ＆ 個人持股戰情室")
 
 DEFAULT_THEME_POOLS = {
     "🌐 CPO 光通訊 / 矽光子": ["6442", "3450", "4979", "3163", "6451", "3081", "4908"],
@@ -319,7 +319,6 @@ def get_stock_data(symbol):
             return ticker, hist
     return None, pd.DataFrame()
 
-# 四大分頁架構
 tab1, tab2, tab3, tab4 = st.tabs(["🚀 起漲掃描榜", "🔥 AI 題材儀表板", "🔍 個股深度診斷", "💼 個人持股戰情室"])
 
 # ==================== 分頁一：起漲掃描榜 ====================
@@ -447,7 +446,6 @@ with tab2:
                     請列出台灣股市（台股）中與「{custom_theme_input}」高度相關的 5 到 8 間代表性上市公司或上櫃公司的【4位數股票代號】。
                     請直接回傳一個純 JSON 格式的 4 位數代號字串陣列（List of string），例如：["6488", "3532", "6182"]。不要包含任何額外的文字或 Markdown 標記。
                     """
-                  model = genai.GenerativeModel("gemini-3.6-flash")
+                    model = genai.GenerativeModel("gemini-3.6-flash")
                     res = model.generate_content(prompt)
-                    cleaned_text = res.text.replace("```json", "").replace("```", "").strip()
-                    ai_tickers = json.loads(cleaned_text)
+                    cleaned_text = res.text.replace("```json", "").replace("
