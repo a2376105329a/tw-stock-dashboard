@@ -8,6 +8,35 @@ from datetime import datetime, timedelta
 import google.generativeai as genai
 
 st.set_page_config(page_title="台股低基期起漲量化戰情室", layout="wide")
+
+# --- 🔒 密碼防護解鎖機制 ---
+def check_password():
+    def password_entered():
+        # 預設密碼若沒在 Secrets 設定，則預設為 "1234"
+        correct_pwd = st.secrets.get("PASSWORD", "1234")
+        if st.session_state["password"] == correct_pwd:
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]
+        else:
+            st.session_state["password_correct"] = False
+
+    if "password_correct" not in st.session_state:
+        st.markdown("### 🔒 【台股量化戰情室】請輸入存取密碼")
+        st.text_input("密碼", type="password", on_change=password_entered, key="password")
+        return False
+    elif not st.session_state["password_correct"]:
+        st.markdown("### 🔒 【台股量化戰情室】請輸入存取密碼")
+        st.text_input("密碼", type="password", on_change=password_entered, key="password")
+        st.error("😕 密碼錯誤，請重新輸入")
+        return False
+    else:
+        return True
+
+# 如果密碼不正確，直接停止執行後續網頁內容
+if not check_password():
+    st.stop()
+# -------------------------
+
 st.title("🎯 台股量化作戰室：低基期起漲 ＆ AI 題材方格儀表板 ＆ 個人持股戰情室")
 
 DEFAULT_THEME_POOLS = {
