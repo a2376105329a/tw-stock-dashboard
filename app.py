@@ -331,7 +331,7 @@ with tab1:
         | **2. 爆量攻擊** | 主力點火、低檔金叉 | 低檔金叉 ($K<65$) 且量放大 1.3 倍：**20分** | 20分 |
         | **3. 產品毛利率** | 產品定價權與護城河 | 毛利率 $\ge 30\%$：**20分** | 20分 |
         | **4. 本業營益率** | 實質本業獲利能力 | 營益率 $> 10\%$：**20分** | 20分 |
-        | **5. 雙軌籌碼追蹤** | 軌道A(集保大戶) ＋ 軌Box(三大法人連買) | 大戶持股集中或法人強勢連買：**最高20分** | 20分 |
+        | **5. 雙軌籌碼追蹤** | 軌道A(集保大戶) ＋ 軌道B(三大法人連買) | 大戶持股集中或法人強勢連買：**最高20分** | 20分 |
         | **🔥 型態加分** | 洗盤結束突破 | 均線糾結 / 破底翻 / VCP 突破：**額外 +10分** | Bonus |
         """)
 
@@ -429,7 +429,6 @@ with tab2:
     st.subheader("🔥 AI 智慧題材板塊 ＆ 族群熱力方格戰情室")
     st.caption("戰略應用：點擊下方任何一個【題材方格卡片】，即可立刻載入該族群的詳細個股量化對比與起漲推薦！")
     
-    # 支援 AI 動態新增題材
     with st.expander("✨ 找不到想看的題材？點此使用 AI 動態新增自訂題材池", expanded=False):
         c_in1, c_in2 = st.columns([3, 1])
         with c_in1:
@@ -460,31 +459,26 @@ with tab2:
 
     st.markdown("---")
     
-    # 初始化目前選中的題材
     if 'active_theme' not in st.session_state:
         st.session_state['active_theme'] = list(DEFAULT_THEME_POOLS.keys())[0]
 
-    # --- 渲染方格按鈕 (Tile Heatmap Grid) ---
     st.write("#### 🧱 點擊方格以切換檢視族群戰情：")
     
     themes_list = list(DEFAULT_THEME_POOLS.keys())
-    # 以每行 4 個方格的排版呈現
     cols_per_row = 4
     for i in range(0, len(themes_list), cols_per_row):
         row_themes = themes_list[i:i + cols_per_row]
         cols = st.columns(cols_per_row)
         for j, theme_name in enumerate(row_themes):
             with cols[j]:
-                # 判斷是否為目前選中的方格
                 is_selected = (st.session_state['active_theme'] == theme_name)
-                btn_label = f"📌 {theme_name}" if is_selected else theme_name
+                btn_label = f"📌 【選中】{theme_name}" if is_selected else theme_name
                 
-                # 點擊按鈕切換主動檢視的題材
                 if st.button(btn_label, use_container_width=True, key=f"tile_{theme_name}"):
                     st.session_state['active_theme'] = theme_name
 
     active_theme = st.session_state['active_theme']
-    st.markdown(st.markdown(f"### 📍 目前選中檢視板塊：**{active_theme}**"))
+    st.markdown(f"### 📌 目前選中檢視板塊：**{active_theme}**")
     
     theme_tickers = DEFAULT_THEME_POOLS[active_theme]
     
@@ -527,7 +521,6 @@ with tab2:
             up_count = len(df_theme[df_theme["今日漲跌幅(%)"] > 0])
             leader_stock = df_theme.iloc[0]["名稱"]
             
-            # 根據族群平均漲跌幅決定頂部卡片燈號顏色
             heat_color = "🔥 強勢漲停/大漲" if avg_pct > 1.5 else ("🟢 溫和上漲" if avg_pct > 0 else "📉 整理回檔")
             
             c1, c2, c3, c4 = st.columns(4)
