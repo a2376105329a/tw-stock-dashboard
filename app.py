@@ -3,23 +3,25 @@ import pandas as pd
 import yfinance as yf
 import plotly.graph_objects as go
 import requests, io
+import json
 from datetime import datetime, timedelta
 import google.generativeai as genai
 
 st.set_page_config(page_title="台股低基期起漲量化戰情室", layout="wide")
-st.title("🎯 台股量化作戰室：低基期起漲 ＆ 熱門題材板塊 ＆ AI 估值診斷")
+st.title("🎯 台股量化作戰室：低基期起漲 ＆ AI 智慧題材儀表板 ＆ 估值診斷")
 
-# --- 🎯 擴充後的 AI 與台股核心次產業概念分類池 ---
-THEME_POOLS = {
+# 基礎預設題材池 (持續擴充最新 AI 與次產業)
+DEFAULT_THEME_POOLS = {
     "🌐 CPO 光通訊 / 矽光子": ["6442", "3450", "4979", "3163", "6451", "3081", "4908"],
     "📦 IC 載板 ＆ 高階 PCB": ["3037", "3189", "8046", "4958", "2383", "6274", "2368"],
-    "⚡ PCB 銅箔基板 (CCL)": ["6213", "2383", "6274", "5347", "8358"], # 台光電, 台燿, 聯茂, 金居等
-    "🧵 玻纖布 ＆ 上游材料": ["1815", "5388", "5475", "1314"], # 富喬, 中視金, 德宏等
-    "🔋 功率半導體 / 碳化矽": ["5425", "2481", "8261", "6573", "3707"], # 台半, 強茂, 大中, 虹揚-KY, 漢磊等
-    "📌 導線架 ＆ 封裝零組件": ["2351", "5285", "6531"], # 順德, 界霖, 愛普*等
-    "🛰️ 低軌衛星 ＆ 航太通訊": ["2314", "3491", "6285", "2313", "3062"], # 台揚, 昇達科, 啟碁, 華通, 建漢等
-    "⚙️ 半導體 / AI 設備": ["3131", "3583", "6187", "5443", "2467", "8064", "2404"], # 弘塑, 辛耘, 萬潤, 漢唐等
-    "💾 記憶體 ＆ 模組": ["2408", "8299", "3260", "2344", "4967"], # 南亞科, 群聯, 威剛, 華邦電, 十銓等
+    "⚡ PCB 銅箔基板 (CCL)": ["6213", "2383", "6274", "5347", "8358"],
+    "🧵 玻纖布 ＆ 上游材料": ["1815", "5388", "5475", "1314"],
+    "🔋 功率半導體 / 碳化矽": ["5425", "2481", "8261", "6573", "3707"],
+    "🔮 矽晶圓 ＆ 半導體材料": ["6488", "3532", "6182", "5483", "3702"], # 環球晶, 台勝科, 合晶, 中美晶, 大聯大等
+    "📌 導線架 ＆ 封裝零組件": ["2351", "5285", "6531"],
+    "🛰️ 低軌衛星 ＆ 航太通訊": ["2314", "3491", "6285", "2313", "3062", "2317"],
+    "⚙️ 半導體 / AI 設備": ["3131", "3583", "6187", "5443", "2467", "8064", "2404"],
+    "💾 記憶體 ＆ 模組": ["2408", "8299", "3260", "2344", "4967"],
     "❄️ AI 散熱 ＆ 液冷架構": ["3017", "3324", "8996", "3653", "6642", "3483"],
     "🔌 重電電網 ＆ 綠能儲能": ["1519", "1503", "1513", "1514", "2371", "6806"],
     "🖥️ AI 伺服器 ＆ 電源機殼": ["6669", "2382", "3231", "2376", "2356", "8210", "3617", "2059"]
@@ -318,8 +320,7 @@ def get_stock_data(symbol):
             return ticker, hist
     return None, pd.DataFrame()
 
-# 三大分頁架構
-tab1, tab2, tab3 = st.tabs(["🚀 低基期起漲掃描榜", "🔥 熱門主題板塊儀表板", "🔍 個股搜尋 ＆ AI 估值診斷"])
+tab1, tab2, tab3 = st.tabs(["🚀 低基期起漲掃描榜", "🔥 AI 智慧題材板塊儀表板", "🔍 個股搜尋 ＆ AI 估值診斷"])
 
 # ==================== 分頁一：起漲掃描榜 ====================
 with tab1:
@@ -424,15 +425,49 @@ with tab1:
                         st.markdown(f"👉 **觸發情況**：\n{reason_text}")
                     st.divider()
 
-# ==================== 分頁二：熱門主題板塊儀表板 ====================
+# ==================== 分頁二：AI 智慧題材板塊儀表板 ====================
 with tab2:
-    st.subheader("🔥 台股核心主題族群透視 ＆ AI 供應鏈輪動戰情室")
-    st.caption("戰略應用：一鍵透視次產業族群強度，並自動找出族群中【評分最高 ＆ 月線乖離最低】的起漲潛力飆股！")
+    st.subheader("🔥 AI 智慧題材板塊 ＆ 次產業輪動戰情室")
+    st.caption("戰略應用：除了內建熱門題材，你還可以使用【✨ AI 智慧動態組題】輸入任何新題材，讓 AI 自動列出成分股並掃描！")
     
-    selected_theme = st.selectbox("請選擇要透視的熱門題材與 AI 次產業板塊：", list(THEME_POOLS.keys()))
-    theme_tickers = THEME_POOLS[selected_theme]
+    # 選擇內建題材或自行輸入
+    theme_mode = st.radio("選擇題材來源：", ["📂 內建熱門 AI 與次產業題材池", "✨ 自訂輸入新題材讓 AI 動態組題 (不怕漏掉股票)"], horizontal=True)
     
-    if st.button(f"⚡ 開始掃描【{selected_theme}】族群現況"):
+    theme_tickers = []
+    selected_theme_name = ""
+    
+    if theme_mode == "📂 內建熱門 AI 與次產業題材池":
+        selected_theme_name = st.selectbox("請選擇內建題材板塊：", list(DEFAULT_THEME_POOLS.keys()))
+        theme_tickers = DEFAULT_THEME_POOLS[selected_theme_name]
+    else:
+        custom_theme_input = st.text_input("輸入你想查詢的新題材（例如：『機器人概念股』、『矽光子新兵』、『太空低軌衛星』）：", value="矽晶圓概念股")
+        if custom_theme_input and "GEMINI_API_KEY" in st.secrets:
+            if st.button("🤖 呼叫 AI 動態生成成分股代號清單"):
+                with st.spinner(f"AI 正在為您搜尋並整理【{custom_theme_input}】的台股上市櫃公司代號清單中..."):
+                    try:
+                        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+                        prompt = f"""
+                        請列出台灣股市（台股）中與「{custom_theme_input}」高度相關的 5 到 8 間代表性上市公司或上櫃公司的【4位數股票代號】。
+                        請直接回傳一個純 JSON 格式的 4 位數代號字串陣列（List of string），例如：["6488", "3532", "6182"]。不要包含任何額外的文字或 Markdown 標記，確保可以用 json.loads 解析。
+                        """
+                        model = genai.GenerativeModel("gemini-3.6-flash")
+                        res = model.generate_content(prompt)
+                        cleaned_text = res.text.replace("```json", "").replace("```", "").strip()
+                        ai_tickers = json.loads(cleaned_text)
+                        st.session_state['ai_dynamic_tickers'] = ai_tickers
+                        st.session_state['ai_dynamic_name'] = f"✨ AI 自訂主題：{custom_theme_input}"
+                        st.success(f"✅ AI 成功生成成分股代號：{ai_tickers}")
+                    except Exception as e:
+                        st.error(f"AI 解析成分股失敗：{e}")
+        
+        if 'ai_dynamic_tickers' in st.session_state:
+            selected_theme_name = st.session_state['ai_dynamic_name']
+            theme_tickers = st.session_state['ai_dynamic_tickers']
+        else:
+            selected_theme_name = "✨ AI 自訂主題 (尚未生成)"
+            theme_tickers = []
+
+    if theme_tickers and st.button(f"⚡ 開始掃描【{selected_theme_name}】族群現況"):
         with st.spinner("正在抓取族群個股行情與量化評分中..."):
             theme_results = []
             for tid in theme_tickers:
@@ -483,7 +518,7 @@ with tab2:
                 c4.metric("族群低基期推薦", f"{best_pick}")
 
                 st.markdown("---")
-                st.write(f"#### 📋 【{selected_theme}】族群個股量化數據對比表")
+                st.write(f"#### 📋 【{selected_theme_name}】族群個股量化數據對比表")
                 st.dataframe(df_theme, use_container_width=True)
 
                 st.markdown("#### 📊 族群月線乖離率分佈 (尋找 $\le 8\%$ 安全起漲區)")
@@ -501,7 +536,7 @@ with tab2:
                 fig_bar.update_layout(height=350, margin=dict(l=20, r=20, t=20, b=20), yaxis_title="月線乖離率 (%)")
                 st.plotly_chart(fig_bar, use_container_width=True)
             else:
-                st.error("目前讀取族群行情異常，請稍後重試。")
+                st.error("目前讀取族群行情異常或查無對應成分股。")
 
 # ==================== 分頁三：個股搜尋 ＆ AI 業務解密 ＆ 估值診斷 ====================
 with tab3:
