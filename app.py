@@ -447,6 +447,7 @@ with tab2:
                     請列出台灣股市（台股）中與「{custom_theme_input}」高度相關的 5 到 8 間代表性上市公司或上櫃公司的【4位數股票代號】。
                     請直接回傳一個純 JSON 格式的 4 位數代號字串陣列（List of string），例如：["6488", "3532", "6182"]。不要包含任何額外的文字或 Markdown 標記。
                     """
-                    model = genai.GenerativeModel("gemini-3.6-flash")
+                  model = genai.GenerativeModel("gemini-3.6-flash")
                     res = model.generate_content(prompt)
-                    cleaned_text = res.text.replace("```json", "").replace("
+                    cleaned_text = res.text.replace("```json", "").replace("```", "").strip()
+                    ai_tickers = json.loads(cleaned_text)
