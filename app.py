@@ -7,7 +7,6 @@ import requests, io
 st.set_page_config(page_title="台股低基期起漲量化戰情室", layout="wide")
 st.title("🎯 台股量化作戰室：低基期起漲 ＆ 法人產業估值診斷")
 
-# 產業中文化對照表
 INDUSTRY_MAP = {
     "半導體業": "半導體 / 先進製程 / 封測",
     "電腦及週邊設備業": "電腦硬體 / AI伺服器代工",
@@ -23,7 +22,6 @@ INDUSTRY_MAP = {
     "航運業": "航運航港 / 貨櫃 / 航空"
 }
 
-# 產業常態本益比評價倍數基準表 (保守 / 合理 / 樂觀)
 INDUSTRY_PE_BENCHMARK = {
     "半導體 / 先進製程 / 封測": {"low": 15, "mid": 20, "high": 25},
     "電腦硬體 / AI伺服器代工": {"low": 12, "mid": 16, "high": 22},
@@ -39,7 +37,6 @@ INDUSTRY_PE_BENCHMARK = {
 
 @st.cache_data(ttl=86400)
 def get_tw_stock_meta():
-    """抓取全台股名稱與產業別對照表"""
     headers = {'User-Agent': 'Mozilla/5.0'}
     name_map, industry_map = {}, {}
     urls = [
@@ -70,7 +67,6 @@ name_map, industry_map = get_tw_stock_meta()
 
 @st.cache_data(ttl=3600)
 def get_active_market_stocks():
-    """從證交所開放平台拉取即時交易量較大之上市股票清單"""
     url = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
     try:
         res = requests.get(url, timeout=10)
@@ -100,19 +96,16 @@ def calculate_indicators(df):
     close = df['Close'].astype(float)
     low, high = df['Low'].astype(float), df['High'].astype(float)
     
-    # 均線系統
     df['MA5'] = close.rolling(5).mean()
     df['MA10'] = close.rolling(10).mean()
     df['MA20'] = close.rolling(20).mean()
     df['MA60'] = close.rolling(60).mean()
 
-    # KD 指標 (9, 3, 3)
     l9, h9 = low.rolling(9).min(), high.rolling(9).max()
     rsv = ((close - l9) / (h9 - l9) * 100).fillna(50)
     df['K'] = rsv.ewm(com=2, adjust=False).mean()
     df['D'] = df['K'].ewm(com=2, adjust=False).mean()
 
-    # RSI 強弱指標 (14日)
     delta = close.diff()
     gain = delta.where(delta > 0, 0).rolling(14).mean()
     loss = -delta.where(delta < 0, 0).rolling(14).mean()
@@ -161,7 +154,6 @@ def detect_pattern(df):
     return "", 0, 0
 
 def evaluate_single_stock(ticker_obj, hist):
-    """計算單一個股的量化得分與得分解剖明細"""
     s_bias, s_vol_kd, s_gm, s_om, s_pat = 0, 0, 0, 0, 0
     desc_bias, desc_vol_kd, desc_gm, desc_om, desc_pat = "", "", "", "", ""
     
@@ -259,10 +251,9 @@ def get_stock_data(symbol):
             return ticker, hist
     return None, pd.DataFrame()
 
-# 簡潔雙分頁架構
-tab1, tab2 = st.tabs(["🚀 低基期起漲掃描榜", "🔍 個股搜尋 ＆ 法人產業估值診斷"])
+tab1, tab2 = st.tabs(["🚀 低基期起漲掃描 ＆ 得分解剖", "🔍 個股搜尋 ＆ 法人產業估值診斷"])
 
-# ==================== 分頁一：起漲掃描榜 ====================
+# ==================== 分頁一：起漲掃描榜與明細 ====================
 with tab1:
     with st.expander("📖 點擊展開：【量化評分標準與加分邏輯全覽】", expanded=False):
         st.markdown("""
@@ -287,6 +278,7 @@ with tab1:
         st.write(f"已從市場鎖定 **{len(candidates)} 檔** 動能標的進行深度評分解剖...")
         progress_bar = st.progress(0)
         ranking_list = []
+        detail_dict = {}
         
         for idx, (_, row) in enumerate(candidates.iterrows()):
             sid = str(row['id'])
@@ -303,10 +295,12 @@ with tab1:
                     tag = pat_desc.split("：")[-1].split("！")[0] if "🔥" in pat_desc else ("低基期起漲" if details["低基期乖離"][0] == 25 else "動能觀察")
                 else:
                     curr_p = row['close']
-                    score, light, target, stop, tag = 0, "⚪ 數據不足", curr_p * 1.08, curr_p * 0.93, "無資料"
+                    score, light, target, stop, details = 0, "⚪ 數據不足", curr_p * 1.08, curr_p * 0.93, {}
+                    tag = "無資料"
             except Exception:
                 curr_p = row['close']
-                score, light, target, stop, tag = 0, "⚪ 讀取異常", curr_p * 1.08, curr_p * 0.93, "異常"
+                score, light, target, stop, details = 0, "⚪ 異常", curr_p * 1.08, curr_p * 0.93, {}
+                tag = "異常"
 
             ranking_list.append({
                 "代號": sid,
@@ -319,11 +313,47 @@ with tab1:
                 "結構防守價": stop,
                 "主要特徵標籤": tag
             })
+            
+            detail_dict[f"{sid} {sname}"] = {
+                "現價": curr_p, "目標價": target, "防守價": stop,
+                "總分": score, "燈號": light, "產業": sind, "細項得分": details
+            }
             progress_bar.progress((idx + 1) / len(candidates))
 
-        df_res = pd.DataFrame(ranking_list).sort_values(by="綜合總分", ascending=False).reset_index(drop=True)
-        st.success(f"✅ 掃描完成！共評估 {len(df_res)} 檔活躍股，以下為排行榜：")
-        st.dataframe(df_res, use_container_width=True)
+        st.session_state['scan_df'] = pd.DataFrame(ranking_list).sort_values(by="綜合總分", ascending=False).reset_index(drop=True)
+        st.session_state['scan_details'] = detail_dict
+
+    if 'scan_df' in st.session_state:
+        st.success(f"✅ 掃描完成！共評估 {len(st.session_state['scan_df'])} 檔活躍股，以下為排行榜：")
+        st.dataframe(st.session_state['scan_df'], use_container_width=True)
+
+        st.markdown("---")
+        st.subheader("🔍 點擊查看排行榜個股【得分解剖明細報告】")
+        selected_stock = st.selectbox("請選擇欲深入查看得分解剖的股票：", list(st.session_state['scan_details'].keys()))
+        
+        if selected_stock:
+            info_data = st.session_state['scan_details'][selected_stock]
+            k1, k2, k3, k4, k5 = st.columns(5)
+            k1.metric("綜合量化總分", f"{info_data['總分']} 分", info_data['燈號'])
+            k2.metric("目前現價", f"${info_data['現價']}")
+            k3.metric("短線目標價", f"${info_data['目標價']}")
+            k4.metric("結構防守價", f"${info_data['防守價']}")
+            k5.metric("產業板塊", info_data['產業'])
+
+            st.write("#### 📊 五大維度具體得分與條件觸發原因：")
+            for cat_name, (score_val, max_val, reason_text) in info_data["細項得分"].items():
+                with st.container():
+                    c_badge, c_text = st.columns([1, 4])
+                    with c_badge:
+                        if score_val >= max_val * 0.8:
+                            st.success(f"**{cat_name}**：{score_val} / {max_val} 分")
+                        elif score_val > 0:
+                            st.warning(f"**{cat_name}**：{score_val} / {max_val} 分")
+                        else:
+                            st.error(f"**{cat_name}**：{score_val} / {max_val} 分")
+                    with c_text:
+                        st.markdown(f"👉 **觸發情況**：{reason_text}")
+                    st.divider()
 
 # ==================== 分頁二：個股搜尋 ＆ 法人產業估值診斷 ====================
 with tab2:
@@ -339,26 +369,21 @@ with tab2:
             s_name = name_map.get(target_stock, "")
             s_ind = industry_map.get(target_stock, "其他板塊")
             
-            # 執行量化評分
             score, light, tech_target, tech_stop, details = evaluate_single_stock(ticker_obj, hist)
             
             latest_price = round(hist['Close'].iloc[-1], 2)
             prev_price = round(hist['Close'].iloc[-2], 2)
             price_change = round(((latest_price - prev_price) / prev_price) * 100, 2)
             
-            # 基本面數據
             gm = round(info.get('grossMargins', 0) * 100, 2) if info.get('grossMargins') else "N/A"
             om = round(info.get('operatingMargins', 0) * 100, 2) if info.get('operatingMargins') else "N/A"
             eps = round(info.get('trailingEps', 0), 2) if info.get('trailingEps') else None
             curr_pe = round(info.get('trailingPE', 0), 1) if info.get('trailingPE') else None
             
-            # ----------------- 🎯 法人預期目標價與產業本益比推估 -----------------
-            # 1. 抓取法人機構目標價 (Consensus Target)
             analyst_target = info.get('targetMeanPrice')
             analyst_high = info.get('targetHighPrice')
             analyst_low = info.get('targetLowPrice')
             
-            # 2. 產業常態 P/E 基準估值推算
             pe_bench = INDUSTRY_PE_BENCHMARK.get(s_ind, INDUSTRY_PE_BENCHMARK["其他板塊"])
             val_low, val_mid, val_high = None, None, None
             if eps and eps > 0:
@@ -366,7 +391,6 @@ with tab2:
                 val_mid = round(eps * pe_bench["mid"], 1)
                 val_high = round(eps * pe_bench["high"], 1)
 
-            # 1. 頂部核心卡片
             k1, k2, k3, k4, k5 = st.columns(5)
             k1.metric("綜合量化評分", f"{score} 分", light)
             k2.metric("最新收盤價", f"${latest_price}", f"{price_change}%")
@@ -374,12 +398,10 @@ with tab2:
             k4.metric("近四季 EPS", f"{eps} 元" if eps else "無資料")
             k5.metric("產業板塊", s_ind)
 
-            # 2. 🎯 法人目標價 vs 產業本益比估值推估專區
             st.markdown("---")
             st.subheader("🎯 目標價與估值空間解剖 (法人共識 ＆ 產業本益比推估)")
             
             v_col1, v_col2, v_col3 = st.columns(3)
-            
             with v_col1:
                 st.markdown("#### 🏢 法人機構目標價")
                 if analyst_target:
@@ -387,15 +409,14 @@ with tab2:
                     st.metric("法人共識平均目標價", f"${round(analyst_target, 1)}", f"潛在空間: {upside_analyst}%")
                     st.caption(f"法人預估區間：**${round(analyst_low, 1)} ~ ${round(analyst_high, 1)}**" if analyst_high else "")
                 else:
-                    st.info("法人目前尚無公開共識目標價（多屬中小型股或尚未出具最新報告）。")
-                    st.caption("建議參考右側「產業本益比推算」或「技術結構目標價」。")
+                    st.info("法人目前尚無公開共識目標價。")
 
             with v_col2:
                 st.markdown(f"#### 🏭 產業 P/E 估值推算 ({s_ind})")
                 if val_mid:
                     upside_pe = round(((val_mid - latest_price) / latest_price) * 100, 1)
                     st.metric(f"產業合理目標價 ({pe_bench['mid']}X)", f"${val_mid}", f"潛在空間: {upside_pe}%")
-                    st.caption(f"估值河流區間：保守 **${val_low}** ({pe_bench['low']}X) ～ 樂觀 **${val_high}** ({pe_bench['high']}X)")
+                    st.caption(f"估值河流區間：保守 **${val_low}** ～ 樂觀 **${val_high}**")
                 else:
                     st.info("因近四季 EPS 為負或無資料，無法進行本益比推算。")
 
@@ -403,18 +424,10 @@ with tab2:
                 st.markdown("#### 📐 技術線型結構點位")
                 upside_tech = round(((tech_target - latest_price) / latest_price) * 100, 1)
                 st.metric("波段技術壓力目標價", f"${tech_target}", f"潛在空間: {upside_tech}%")
-                st.caption(f"關鍵停損防守價：**${tech_stop}** (跌破代表起漲結構破壞)")
+                st.caption(f"關鍵停損防守價：**${tech_stop}**")
 
-            # 3. 獲利基本面輔助列
             st.markdown("---")
-            f1, f2, f3 = st.columns(3)
-            f1.caption(f"📊 最新毛利率：**{gm}%**" if gm != "N/A" else "📊 最新毛利率：無資料")
-            f2.caption(f"🏢 營業利益率：**{om}%**" if om != "N/A" else "🏢 營業利益率：無資料")
-            f3.caption(f"💡 估值結論：目前 P/E **{curr_pe} 倍** 對比產業中位 **{pe_bench['mid']} 倍**，評價" + 
-                       ("【相對便宜】" if (curr_pe and curr_pe < pe_bench['low']) else ("【位處合理區間】" if (curr_pe and curr_pe <= pe_bench['high']) else "【偏向高估/已反應成長】")))
-
-            # 4. 得分解剖與條件判定卡片
-            with st.expander(f"📋 點擊查看【{target_stock} {s_name} 低基期起漲得分解剖】", expanded=False):
+            with st.expander(f"📋 點擊查看【{target_stock} {s_name} 低基期起漲得分解剖】", expanded=True):
                 for cat_name, (score_val, max_val, reason_text) in details.items():
                     c_badge, c_text = st.columns([1, 4])
                     with c_badge:
@@ -428,39 +441,17 @@ with tab2:
                         st.markdown(f"👉 **觸發情況**：{reason_text}")
                     st.divider()
 
-            # 5. 互動日K線與均線
             st.subheader(f"📈 {target_stock} {s_name} 技術線型 (日K / MA5 / MA10 / MA20 / MA60)")
             fig = go.Figure()
             fig.add_trace(go.Candlestick(
                 x=hist.index, open=hist['Open'], high=hist['High'],
                 low=hist['Low'], close=hist['Close'], name='日K線'
             ))
-            fig.add_trace(go.Scatter(x=hist.index, y=hist['MA5'], line=dict(color='orange', width=1.2), name='5MA (週線)'))
+            fig.add_trace(go.Scatter(x=hist.index, y=hist['MA5'], line=dict(color='orange', width=1.2), name='5MA'))
             fig.add_trace(go.Scatter(x=hist.index, y=hist['MA10'], line=dict(color='purple', width=1.2), name='10MA'))
             fig.add_trace(go.Scatter(x=hist.index, y=hist['MA20'], line=dict(color='blue', width=2), name='20MA (月線)'))
             fig.add_trace(go.Scatter(x=hist.index, y=hist['MA60'], line=dict(color='green', width=1.5), name='60MA (季線)'))
             fig.update_layout(xaxis_rangeslider_visible=False, height=450, margin=dict(l=20, r=20, t=20, b=20))
             st.plotly_chart(fig, use_container_width=True)
-
-            # 6. 動能指標 (KD & RSI)
-            c_kd, c_rsi = st.columns(2)
-            with c_kd:
-                st.write("**⚡ KD 指標走勢 (9, 3, 3)**")
-                fig_kd = go.Figure()
-                fig_kd.add_trace(go.Scatter(x=hist.index, y=hist['K'], line=dict(color='red', width=1.5), name='K值'))
-                fig_kd.add_trace(go.Scatter(x=hist.index, y=hist['D'], line=dict(color='green', width=1.5), name='D值'))
-                fig_kd.add_hline(y=80, line_dash="dash", line_color="gray")
-                fig_kd.add_hline(y=20, line_dash="dash", line_color="gray")
-                fig_kd.update_layout(height=220, margin=dict(l=10, r=10, t=10, b=10), yaxis_range=[0, 100])
-                st.plotly_chart(fig_kd, use_container_width=True)
-            
-            with c_rsi:
-                st.write("**📊 RSI 強弱指標 (14日)**")
-                fig_rsi = go.Figure()
-                fig_rsi.add_trace(go.Scatter(x=hist.index, y=hist['RSI'], line=dict(color='blue', width=1.5), name='RSI'))
-                fig_rsi.add_hline(y=70, line_dash="dash", line_color="red")
-                fig_rsi.add_hline(y=30, line_dash="dash", line_color="green")
-                fig_rsi.update_layout(height=220, margin=dict(l=10, r=10, t=10, b=10), yaxis_range=[0, 100])
-                st.plotly_chart(fig_rsi, use_container_width=True)
         else:
             st.error("查無此代號技術數據或歷史長度不足 60 天，請確認代號是否正確。")
