@@ -34,4 +34,3 @@ if "均線糾結" in pat or "破底翻" in pat:
 elif pat != "":
     score += 10
     features.append(f"🔥動能突破:{pat}(+10分)")
-    
