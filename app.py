@@ -480,7 +480,7 @@ with tab2:
                             請使用繁體中文回答，語氣專業、精煉、條理分明，適合投資人快速掌握。
                             """
                             
-                            model = genai.GenerativeModel("gemini-2.5-flash")
+                            model = genai.GenerativeModel("gemini-3.6-flash")
                             response = model.generate_content(prompt)
                             
                             st.markdown(response.text)
