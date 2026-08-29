@@ -5,8 +5,9 @@ import plotly.graph_objects as go
 import requests, io
 
 st.set_page_config(page_title="台股低基期起漲量化戰情室", layout="wide")
-st.title("🎯 台股量化作戰室：低基期起漲 ＆ 評分明細解剖看板")
+st.title("🎯 台股量化作戰室：低基期起漲 ＆ 法人產業估值診斷")
 
+# 產業中文化對照表
 INDUSTRY_MAP = {
     "半導體業": "半導體 / 先進製程 / 封測",
     "電腦及週邊設備業": "電腦硬體 / AI伺服器代工",
@@ -20,6 +21,20 @@ INDUSTRY_MAP = {
     "鋼鐵工業": "鋼鐵鋼筋",
     "生技醫療業": "生技醫療",
     "航運業": "航運航港 / 貨櫃 / 航空"
+}
+
+# 產業常態本益比評價倍數基準表 (保守 / 合理 / 樂觀)
+INDUSTRY_PE_BENCHMARK = {
+    "半導體 / 先進製程 / 封測": {"low": 15, "mid": 20, "high": 25},
+    "電腦硬體 / AI伺服器代工": {"low": 12, "mid": 16, "high": 22},
+    "電子零組件 / PCB / 散熱 / 被動元件": {"low": 14, "mid": 18, "high": 25},
+    "網通設備 / CPO光通訊": {"low": 16, "mid": 22, "high": 30},
+    "重電設備 / 綠能電網 / 電線電纜": {"low": 15, "mid": 20, "high": 28},
+    "電子零組件通路商": {"low": 10, "mid": 12, "high": 15},
+    "資訊軟體 / 系統整合": {"low": 18, "mid": 24, "high": 32},
+    "化學工業 / 特用化學": {"low": 12, "mid": 15, "high": 20},
+    "生技醫療": {"low": 18, "mid": 25, "high": 35},
+    "其他板塊": {"low": 12, "mid": 15, "high": 20}
 }
 
 @st.cache_data(ttl=86400)
@@ -106,7 +121,6 @@ def calculate_indicators(df):
     return df
 
 def detect_pattern(df):
-    """偵測六大起漲突破型態"""
     if len(df) < 60: return "", 0, 0
     close = df['Close']
     curr_price = close.iloc[-1]
@@ -119,28 +133,22 @@ def detect_pattern(df):
     pattern = ""
     struct_stop_loss = ma20
     
-    # 1. 均線糾結突破 (低基期經典起漲)
     ma_prev = [df['MA5'].iloc[-2], df['MA10'].iloc[-2], df['MA20'].iloc[-2], df['MA60'].iloc[-2]]
     if (max(ma_prev) - min(ma_prev)) / min(ma_prev) <= 0.03 and curr_price > max(ma_prev):
         pattern = "【均線糾結突破】"
         struct_stop_loss = min(ma_prev)
-    # 2. 箱型整理突破
     elif (high.iloc[-31:-1].max() - low.iloc[-31:-1].min()) / low.iloc[-31:-1].min() <= 0.15 and curr_price > high.iloc[-31:-1].max():
         pattern = "【箱型整理突破】"
         struct_stop_loss = (high.iloc[-31:-1].max() + low.iloc[-31:-1].min()) / 2
-    # 3. 碗型 VCP 壓縮收斂突破
     elif (high.iloc[-21:-1].max() - low.iloc[-21:-1].min()) < (high.iloc[-41:-21].max() - low.iloc[-41:-21].min()) * 0.7 and curr_price > high.iloc[-21:-1].max():
         pattern = "【碗型VCP突破】"
         struct_stop_loss = low.iloc[-21:-1].min()
-    # 4. 階梯 N 字續強突破
     elif low.iloc[-21:-1].min() > low.iloc[-41:-21].min() and curr_price > high.iloc[-21:-1].max():
         pattern = "【階梯N字突破】"
         struct_stop_loss = low.iloc[-21:-1].min()
-    # 5. 破底翻大底 (洗盤洗乾淨起漲)
     elif (low.iloc[-15:-3] < low.iloc[-60:-15].min()).any() and (close.iloc[-3:-1] > low.iloc[-60:-15].min()).any() and curr_price > high.iloc[-15:-1].max():
         pattern = "【破底翻大底】"
         struct_stop_loss = low.iloc[-15:-1].min()
-    # 6. KD 新金叉 / 多頭續強
     elif df['K'].iloc[-1] > df['D'].iloc[-1] and df['K'].iloc[-1] > df['K'].iloc[-2] and df['RSI'].iloc[-1] > 50:
         pattern = "【新金叉發動】" if df['K'].iloc[-2] <= df['D'].iloc[-2] else "【多頭續強】"
         struct_stop_loss = max(low.iloc[-1], ma20)
@@ -165,7 +173,6 @@ def evaluate_single_stock(ticker_obj, hist):
     vol_ma20 = hist['Volume'].rolling(20).mean().iloc[-1]
     vol_ratio = round(vol_today / vol_ma20, 2) if vol_ma20 > 0 else 1.0
     
-    # 1. 低基期乖離
     bias_pct = round(((curr_p - ma20) / ma20) * 100, 2)
     if 0 < (curr_p - ma20) / ma20 <= 0.08:
         s_bias = 25
@@ -177,7 +184,6 @@ def evaluate_single_stock(ticker_obj, hist):
         s_bias = 0
         desc_bias = f"❌ 跌破月線 (乖離 {bias_pct}%)，尚未進入多頭起漲軌道"
 
-    # 2. 量能與 KD 動能
     is_vol_surge = vol_today >= (vol_ma20 * 1.3)
     if k_val > d_val and k_val < 65:
         if is_vol_surge:
@@ -193,7 +199,6 @@ def evaluate_single_stock(ticker_obj, hist):
         s_vol_kd = 0
         desc_vol_kd = f"❌ KD 呈現空頭死叉 (K:{k_val} < D:{d_val})，動能偏弱"
 
-    # 3. 獲利毛利率
     info = ticker_obj.info
     gm = info.get('grossMargins', 0)
     om = info.get('operatingMargins', 0)
@@ -209,7 +214,6 @@ def evaluate_single_stock(ticker_obj, hist):
         gm_disp = f"{round(gm*100, 1)}%" if gm else "低於15%"
         desc_gm = f"❌ 毛利率偏低 ({gm_disp})，利潤較薄"
 
-    # 4. 本業營益率
     if om and om > 0.10:
         s_om = 25
         desc_om = f"✅ 營益率達 {round(om*100, 1)}% (本業獲利體質極佳)"
@@ -220,7 +224,6 @@ def evaluate_single_stock(ticker_obj, hist):
         s_om = 0
         desc_om = "❌ 本業呈現微幅虧損或損益兩平"
 
-    # 5. 起漲型態
     pat, pat_t, pat_s = detect_pattern(hist)
     if "均線糾結" in pat or "破底翻" in pat:
         s_pat = 15
@@ -257,7 +260,7 @@ def get_stock_data(symbol):
     return None, pd.DataFrame()
 
 # 簡潔雙分頁架構
-tab1, tab2 = st.tabs(["🚀 低基期起漲掃描榜", "🔍 個股搜尋 ＆ 評分解剖診斷"])
+tab1, tab2 = st.tabs(["🚀 低基期起漲掃描榜", "🔍 個股搜尋 ＆ 法人產業估值診斷"])
 
 # ==================== 分頁一：起漲掃描榜 ====================
 with tab1:
@@ -322,10 +325,10 @@ with tab1:
         st.success(f"✅ 掃描完成！共評估 {len(df_res)} 檔活躍股，以下為排行榜：")
         st.dataframe(df_res, use_container_width=True)
 
-# ==================== 分頁二：個股搜尋 ＆ 評分解剖診斷 ====================
+# ==================== 分頁二：個股搜尋 ＆ 法人產業估值診斷 ====================
 with tab2:
-    st.subheader("🔍 個股深度診斷 ＆ 量化得分解剖報告")
-    target_stock = st.text_input("請輸入台股代號（例：3617, 2486, 2356, 2303）：", value="3617")
+    st.subheader("🔍 個股深度診斷 ＆ 法人產業估值模型")
+    target_stock = st.text_input("請輸入台股代號（例：3617, 2486, 2356, 2303, 6278）：", value="3617")
 
     if target_stock:
         ticker_obj, hist = get_stock_data(target_stock)
@@ -336,33 +339,82 @@ with tab2:
             s_name = name_map.get(target_stock, "")
             s_ind = industry_map.get(target_stock, "其他板塊")
             
-            # 執行量化評分模組
-            score, light, target, stop, details = evaluate_single_stock(ticker_obj, hist)
+            # 執行量化評分
+            score, light, tech_target, tech_stop, details = evaluate_single_stock(ticker_obj, hist)
             
             latest_price = round(hist['Close'].iloc[-1], 2)
             prev_price = round(hist['Close'].iloc[-2], 2)
             price_change = round(((latest_price - prev_price) / prev_price) * 100, 2)
             
+            # 基本面數據
             gm = round(info.get('grossMargins', 0) * 100, 2) if info.get('grossMargins') else "N/A"
             om = round(info.get('operatingMargins', 0) * 100, 2) if info.get('operatingMargins') else "N/A"
-            eps = round(info.get('trailingEps', 0), 2) if info.get('trailingEps') else "N/A"
+            eps = round(info.get('trailingEps', 0), 2) if info.get('trailingEps') else None
+            curr_pe = round(info.get('trailingPE', 0), 1) if info.get('trailingPE') else None
+            
+            # ----------------- 🎯 法人預期目標價與產業本益比推估 -----------------
+            # 1. 抓取法人機構目標價 (Consensus Target)
+            analyst_target = info.get('targetMeanPrice')
+            analyst_high = info.get('targetHighPrice')
+            analyst_low = info.get('targetLowPrice')
+            
+            # 2. 產業常態 P/E 基準估值推算
+            pe_bench = INDUSTRY_PE_BENCHMARK.get(s_ind, INDUSTRY_PE_BENCHMARK["其他板塊"])
+            val_low, val_mid, val_high = None, None, None
+            if eps and eps > 0:
+                val_low = round(eps * pe_bench["low"], 1)
+                val_mid = round(eps * pe_bench["mid"], 1)
+                val_high = round(eps * pe_bench["high"], 1)
 
-            # 1. 核心指標卡片層
+            # 1. 頂部核心卡片
             k1, k2, k3, k4, k5 = st.columns(5)
-            k1.metric("綜合量化總分", f"{score} 分", light)
+            k1.metric("綜合量化評分", f"{score} 分", light)
             k2.metric("最新收盤價", f"${latest_price}", f"{price_change}%")
-            k3.metric("短線目標價", f"${target}")
-            k4.metric("結構防守價", f"${stop}")
+            k3.metric("目前本益比 (P/E)", f"{curr_pe} 倍" if curr_pe else "N/A")
+            k4.metric("近四季 EPS", f"{eps} 元" if eps else "無資料")
             k5.metric("產業板塊", s_ind)
 
-            # 2. 獲利基本面輔助列
+            # 2. 🎯 法人目標價 vs 產業本益比估值推估專區
+            st.markdown("---")
+            st.subheader("🎯 目標價與估值空間解剖 (法人共識 ＆ 產業本益比推估)")
+            
+            v_col1, v_col2, v_col3 = st.columns(3)
+            
+            with v_col1:
+                st.markdown("#### 🏢 法人機構目標價")
+                if analyst_target:
+                    upside_analyst = round(((analyst_target - latest_price) / latest_price) * 100, 1)
+                    st.metric("法人共識平均目標價", f"${round(analyst_target, 1)}", f"潛在空間: {upside_analyst}%")
+                    st.caption(f"法人預估區間：**${round(analyst_low, 1)} ~ ${round(analyst_high, 1)}**" if analyst_high else "")
+                else:
+                    st.info("法人目前尚無公開共識目標價（多屬中小型股或尚未出具最新報告）。")
+                    st.caption("建議參考右側「產業本益比推算」或「技術結構目標價」。")
+
+            with v_col2:
+                st.markdown(f"#### 🏭 產業 P/E 估值推算 ({s_ind})")
+                if val_mid:
+                    upside_pe = round(((val_mid - latest_price) / latest_price) * 100, 1)
+                    st.metric(f"產業合理目標價 ({pe_bench['mid']}X)", f"${val_mid}", f"潛在空間: {upside_pe}%")
+                    st.caption(f"估值河流區間：保守 **${val_low}** ({pe_bench['low']}X) ～ 樂觀 **${val_high}** ({pe_bench['high']}X)")
+                else:
+                    st.info("因近四季 EPS 為負或無資料，無法進行本益比推算。")
+
+            with v_col3:
+                st.markdown("#### 📐 技術線型結構點位")
+                upside_tech = round(((tech_target - latest_price) / latest_price) * 100, 1)
+                st.metric("波段技術壓力目標價", f"${tech_target}", f"潛在空間: {upside_tech}%")
+                st.caption(f"關鍵停損防守價：**${tech_stop}** (跌破代表起漲結構破壞)")
+
+            # 3. 獲利基本面輔助列
+            st.markdown("---")
             f1, f2, f3 = st.columns(3)
             f1.caption(f"📊 最新毛利率：**{gm}%**" if gm != "N/A" else "📊 最新毛利率：無資料")
             f2.caption(f"🏢 營業利益率：**{om}%**" if om != "N/A" else "🏢 營業利益率：無資料")
-            f3.caption(f"💰 每股盈餘 (EPS)：**{eps} 元**" if eps != "N/A" else "💰 每股盈餘 (EPS)：無資料")
+            f3.caption(f"💡 估值結論：目前 P/E **{curr_pe} 倍** 對比產業中位 **{pe_bench['mid']} 倍**，評價" + 
+                       ("【相對便宜】" if (curr_pe and curr_pe < pe_bench['low']) else ("【位處合理區間】" if (curr_pe and curr_pe <= pe_bench['high']) else "【偏向高估/已反應成長】")))
 
-            # 3. 得分解剖與條件判定卡片
-            with st.expander(f"📋 點擊查看【{target_stock} {s_name} 得分解剖與原因明細】", expanded=True):
+            # 4. 得分解剖與條件判定卡片
+            with st.expander(f"📋 點擊查看【{target_stock} {s_name} 低基期起漲得分解剖】", expanded=False):
                 for cat_name, (score_val, max_val, reason_text) in details.items():
                     c_badge, c_text = st.columns([1, 4])
                     with c_badge:
@@ -376,7 +428,7 @@ with tab2:
                         st.markdown(f"👉 **觸發情況**：{reason_text}")
                     st.divider()
 
-            # 4. 互動日K線與均線
+            # 5. 互動日K線與均線
             st.subheader(f"📈 {target_stock} {s_name} 技術線型 (日K / MA5 / MA10 / MA20 / MA60)")
             fig = go.Figure()
             fig.add_trace(go.Candlestick(
@@ -390,7 +442,7 @@ with tab2:
             fig.update_layout(xaxis_rangeslider_visible=False, height=450, margin=dict(l=20, r=20, t=20, b=20))
             st.plotly_chart(fig, use_container_width=True)
 
-            # 5. 動能指標 (KD & RSI)
+            # 6. 動能指標 (KD & RSI)
             c_kd, c_rsi = st.columns(2)
             with c_kd:
                 st.write("**⚡ KD 指標走勢 (9, 3, 3)**")
