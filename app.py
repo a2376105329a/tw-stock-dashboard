@@ -7,7 +7,23 @@ from datetime import datetime, timedelta
 import google.generativeai as genai
 
 st.set_page_config(page_title="台股低基期起漲量化戰情室", layout="wide")
-st.title("🎯 台股量化作戰室：低基期起漲 ＆ AI 產業分析師 ＆ 估值診斷")
+st.title("🎯 台股量化作戰室：低基期起漲 ＆ 熱門題材板塊 ＆ AI 估值診斷")
+
+# --- 🎯 擴充後的 AI 與台股核心次產業概念分類池 ---
+THEME_POOLS = {
+    "🌐 CPO 光通訊 / 矽光子": ["6442", "3450", "4979", "3163", "6451", "3081", "4908"],
+    "📦 IC 載板 ＆ 高階 PCB": ["3037", "3189", "8046", "4958", "2383", "6274", "2368"],
+    "⚡ PCB 銅箔基板 (CCL)": ["6213", "2383", "6274", "5347", "8358"], # 台光電, 台燿, 聯茂, 金居等
+    "🧵 玻纖布 ＆ 上游材料": ["1815", "5388", "5475", "1314"], # 富喬, 中視金, 德宏等
+    "🔋 功率半導體 / 碳化矽": ["5425", "2481", "8261", "6573", "3707"], # 台半, 強茂, 大中, 虹揚-KY, 漢磊等
+    "📌 導線架 ＆ 封裝零組件": ["2351", "5285", "6531"], # 順德, 界霖, 愛普*等
+    "🛰️ 低軌衛星 ＆ 航太通訊": ["2314", "3491", "6285", "2313", "3062"], # 台揚, 昇達科, 啟碁, 華通, 建漢等
+    "⚙️ 半導體 / AI 設備": ["3131", "3583", "6187", "5443", "2467", "8064", "2404"], # 弘塑, 辛耘, 萬潤, 漢唐等
+    "💾 記憶體 ＆ 模組": ["2408", "8299", "3260", "2344", "4967"], # 南亞科, 群聯, 威剛, 華邦電, 十銓等
+    "❄️ AI 散熱 ＆ 液冷架構": ["3017", "3324", "8996", "3653", "6642", "3483"],
+    "🔌 重電電網 ＆ 綠能儲能": ["1519", "1503", "1513", "1514", "2371", "6806"],
+    "🖥️ AI 伺服器 ＆ 電源機殼": ["6669", "2382", "3231", "2376", "2356", "8210", "3617", "2059"]
+}
 
 INDUSTRY_MAP = {
     "半導體業": "半導體 / 先進製程 / 封測",
@@ -302,9 +318,10 @@ def get_stock_data(symbol):
             return ticker, hist
     return None, pd.DataFrame()
 
-tab1, tab2 = st.tabs(["🚀 低基期起漲掃描 ＆ 得分解剖", "🔍 個股搜尋 ＆ AI分析 ＆ 估值診斷"])
+# 三大分頁架構
+tab1, tab2, tab3 = st.tabs(["🚀 低基期起漲掃描榜", "🔥 熱門主題板塊儀表板", "🔍 個股搜尋 ＆ AI 估值診斷"])
 
-# ==================== 分頁一：起漲掃描榜與明細 ====================
+# ==================== 分頁一：起漲掃描榜 ====================
 with tab1:
     with st.expander("📖 點擊展開：【六大維度量化評分標準與雙軌籌碼邏輯】", expanded=False):
         st.markdown("""
@@ -314,7 +331,7 @@ with tab1:
         | **2. 爆量攻擊** | 主力點火、低檔金叉 | 低檔金叉 ($K<65$) 且量放大 1.3 倍：**20分** | 20分 |
         | **3. 產品毛利率** | 產品定價權與護城河 | 毛利率 $\ge 30\%$：**20分** | 20分 |
         | **4. 本業營益率** | 實質本業獲利能力 | 營益率 $> 10\%$：**20分** | 20分 |
-        | **5. 雙軌籌碼追蹤** | **軌道A(集保大戶) ＋ 軌道B(三大法人連買)** | **大戶持股集中或法人強勢連買：** **最高20分** | **20分** |
+        | **5. 雙軌籌碼追蹤** | 軌道A(集保大戶) ＋ 軌道B(三大法人連買) | 大戶持股集中或法人強勢連買：**最高20分** | 20分 |
         | **🔥 型態加分** | 洗盤結束突破 | 均線糾結 / 破底翻 / VCP 突破：**額外 +10分** | Bonus |
         """)
 
@@ -327,7 +344,7 @@ with tab1:
         market_stocks = get_active_market_stocks()
         candidates = market_stocks[market_stocks['volume'] >= min_vol_input].sort_values(by="volume", ascending=False).head(scan_limit)
         
-        st.write(f"已從市場鎖定 **{len(candidates)} 檔** 動能標的進行真實籌碼與財報全方位交叉計算...")
+        st.write(f"已從市場鎖定 **{len(candidates)} 檔** 動能標的進行全方位評分解剖...")
         progress_bar = st.progress(0)
         ranking_list = []
         detail_dict = {}
@@ -375,7 +392,7 @@ with tab1:
         st.session_state['scan_details'] = detail_dict
 
     if 'scan_df' in st.session_state:
-        st.success(f"✅ 掃描完成！共評估 {len(st.session_state['scan_df'])} 檔活躍股，以下為排行榜：")
+        st.success(f"✅ 掃描完成！共評估 {len(st.session_state['scan_df'])} 檔活躍股：")
         st.dataframe(st.session_state['scan_df'], use_container_width=True)
 
         st.markdown("---")
@@ -407,8 +424,87 @@ with tab1:
                         st.markdown(f"👉 **觸發情況**：\n{reason_text}")
                     st.divider()
 
-# ==================== 分頁二：個股搜尋 ＆ AI 業務解密 ＆ 估值診斷 ====================
+# ==================== 分頁二：熱門主題板塊儀表板 ====================
 with tab2:
+    st.subheader("🔥 台股核心主題族群透視 ＆ AI 供應鏈輪動戰情室")
+    st.caption("戰略應用：一鍵透視次產業族群強度，並自動找出族群中【評分最高 ＆ 月線乖離最低】的起漲潛力飆股！")
+    
+    selected_theme = st.selectbox("請選擇要透視的熱門題材與 AI 次產業板塊：", list(THEME_POOLS.keys()))
+    theme_tickers = THEME_POOLS[selected_theme]
+    
+    if st.button(f"⚡ 開始掃描【{selected_theme}】族群現況"):
+        with st.spinner("正在抓取族群個股行情與量化評分中..."):
+            theme_results = []
+            for tid in theme_tickers:
+                t_name = name_map.get(tid, tid)
+                
+                try:
+                    ticker, hist = get_stock_data(tid)
+                    if not hist.empty and len(hist) >= 60:
+                        hist = calculate_indicators(hist)
+                        score, light, target, stop, details = evaluate_single_stock(ticker, hist, tid)
+                        curr_p = round(hist['Close'].iloc[-1], 2)
+                        prev_p = round(hist['Close'].iloc[-2], 2)
+                        pct_change = round(((curr_p - prev_p) / prev_p) * 100, 2)
+                        
+                        ma20 = hist['MA20'].iloc[-1]
+                        bias_ma20 = round(((curr_p - ma20) / ma20) * 100, 2)
+                        vol_today = int(hist['Volume'].iloc[-1] / 1000)
+                        
+                        theme_results.append({
+                            "代號": tid,
+                            "名稱": t_name,
+                            "今日收盤價": curr_p,
+                            "今日漲跌幅(%)": pct_change,
+                            "月線乖離率(%)": bias_ma20,
+                            "成交量(張)": vol_today,
+                            "量化總評分": score,
+                            "評分狀態": light,
+                            "短線目標價": target,
+                            "結構防守價": stop
+                        })
+                except Exception:
+                    pass
+
+            if theme_results:
+                df_theme = pd.DataFrame(theme_results).sort_values(by="今日漲跌幅(%)", ascending=False).reset_index(drop=True)
+                
+                avg_pct = round(df_theme["今日漲跌幅(%)"].mean(), 2)
+                up_count = len(df_theme[df_theme["今日漲跌幅(%)"] > 0])
+                leader_stock = df_theme.iloc[0]["名稱"]
+                
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("族群平均漲跌幅", f"{avg_pct}%", "🔥 強勢群聚" if avg_pct > 1 else ("🟢 溫和上漲" if avg_pct > 0 else "⚪ 整理回檔"))
+                c2.metric("族群上漲家數比", f"{up_count} / {len(df_theme)} 家")
+                c3.metric("今日最強領頭羊", f"{leader_stock}", f"+{df_theme.iloc[0]['今日漲跌幅(%)']}%")
+                
+                low_bias_candidates = df_theme[df_theme["月線乖離率(%)"] <= 8].sort_values(by="量化總評分", ascending=False)
+                best_pick = low_bias_candidates.iloc[0]["名稱"] if not low_bias_candidates.empty else "無(皆已脫離成本區)"
+                c4.metric("族群低基期推薦", f"{best_pick}")
+
+                st.markdown("---")
+                st.write(f"#### 📋 【{selected_theme}】族群個股量化數據對比表")
+                st.dataframe(df_theme, use_container_width=True)
+
+                st.markdown("#### 📊 族群月線乖離率分佈 (尋找 $\le 8\%$ 安全起漲區)")
+                fig_bar = go.Figure()
+                colors = ['#2ca02c' if b <= 8 and b >= 0 else ('#ff7f0e' if b > 8 else '#d62728') for b in df_theme['月線乖離率(%)']]
+                fig_bar.add_trace(go.Bar(
+                    x=df_theme['名稱'],
+                    y=df_theme['月線乖離率(%)'],
+                    marker_color=colors,
+                    text=[f"{b}%" for b in df_theme['月線乖離率(%)']],
+                    textposition='auto'
+                ))
+                fig_bar.add_hline(y=8, line_dash="dash", line_color="orange", annotation_text="8% 起漲安全邊界線")
+                fig_bar.add_hline(y=0, line_dash="solid", line_color="gray")
+                fig_bar.update_layout(height=350, margin=dict(l=20, r=20, t=20, b=20), yaxis_title="月線乖離率 (%)")
+                st.plotly_chart(fig_bar, use_container_width=True)
+            else:
+                st.error("目前讀取族群行情異常，請稍後重試。")
+
+# ==================== 分頁三：個股搜尋 ＆ AI 業務解密 ＆ 估值診斷 ====================
+with tab3:
     st.subheader("🔍 個股深度診斷 ＆ AI 產業分析師 ＆ 估值模型")
     target_stock = st.text_input("請輸入台股代號（例：3617, 2486, 2356, 2303, 6278）：", value="3617")
 
@@ -464,17 +560,15 @@ with tab2:
                     with st.spinner("AI 正在深度解析該公司業務模式、供應鏈地位與市場題材中..."):
                         try:
                             genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-                            
-                            # 提取官方英文簡介作為參考背景
                             summary_en = info.get('longBusinessSummary', '無官方簡介')
                             
                             prompt = f"""
                             請以台股專業操盤手與產業分析師的角度，針對台灣股票「{display_title}」（產業板塊：{s_ind}，近四季EPS：{eps}元，目前本益比：{curr_pe}倍）進行深度業務解析。
                             參考英文業務背景：{summary_en}
                             
-                           請分為以下四大區塊回答：
+                            請分為以下四大區塊回答：
                             1. **核心業務與主要產品**：這間公司到底靠什麼賺錢？主力產品或服務是什麼？
-                            2. **產業供應鏈地位與 AI 關聯性**：它在該產業（{s_ind}）中是龍頭、中游供應商還是利基型黑馬？**特別說明它與當前 AI 浪潮是否有高度相關？在 AI 興起的階段，它是否有成功搭上順風車？**
+                            2. **產業供應鏈地位與 AI 關聯性**：它在該產業（{s_ind}）中是龍頭、中游供應商還是利基型黑馬？特別說明它與當前 AI 浪潮是否有高度相關？在 AI 興起的階段，它是否有成功搭上順風車？
                             3. **AI 供應鏈中的角色（上中下游）**：若與 AI 相關，它屬於上游（如關鍵零組件、矽智財、晶圓代工）、中游（如伺服器組裝、散熱、PCB、機殼、CPO光通訊）還是下游應用？若與 AI 無關，其主要核心應用領域為何？
                             4. **近期營運亮點或題材**：結合當前市場趨勢，它具備什麼題材或成長潛力？
                             
@@ -483,12 +577,11 @@ with tab2:
                             
                             model = genai.GenerativeModel("gemini-3.6-flash")
                             response = model.generate_content(prompt)
-                            
                             st.markdown(response.text)
                         except Exception as e:
                             st.error(f"AI 生成報告發生錯誤：{e}")
             else:
-                st.info("💡 提示：若想啟用「AI 產業分析師報告」，請至 Streamlit Cloud 的 Secrets 中設定您的 `GEMINI_API_KEY`。")
+                st.info("💡 提示：若想啟用專屬 AI 分析報告，請至 Streamlit Cloud 的 Secrets 中設定您的 `GEMINI_API_KEY`。")
 
             st.markdown("---")
             st.subheader("🎯 目標價與估值空間解剖 (法人共識 ＆ 產業本益比推估)")
