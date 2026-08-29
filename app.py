@@ -4,8 +4,8 @@ import yfinance as yf
 import plotly.graph_objects as go
 import requests, io
 
-st.set_page_config(page_title="台股量化戰情室：低基期起漲偵測系統", layout="wide")
-st.title("🎯 台股量化作戰室：低基期起漲 ＆ 型態突破量化看板")
+st.set_page_config(page_title="台股低基期起漲量化戰情室", layout="wide")
+st.title("🎯 台股量化作戰室：低基期起漲 ＆ 評分明細解剖看板")
 
 INDUSTRY_MAP = {
     "半導體業": "半導體 / 先進製程 / 封測",
@@ -161,14 +161,22 @@ def get_stock_data(symbol):
             return ticker, hist
     return None, pd.DataFrame()
 
-# 簡潔雙分頁
-tab1, tab2 = st.tabs(["🚀 低基期起漲量化掃描榜", "🔍 個股深度多維度診斷"])
+# 簡潔雙分頁架構
+tab1, tab2 = st.tabs(["🚀 低基期起漲掃描 ＆ 特徵解剖", "🔍 個股深度多維度診斷"])
 
-# ==================== 分頁一：起漲掃描榜 ====================
+# ==================== 分頁一：起漲掃描榜與明細 ====================
 with tab1:
-    st.subheader("🎯 低基期起漲 ＆ 爆量突破排行榜 (滿分 100 分 ＋ 型態加分)")
-    st.caption("核心打分邏輯：低基期乖離控制 (防追高25分) ＋ 低檔KD金叉放量 (主力表態25分) ＋ 高毛利定價權 (25分) ＋ 本業獲利 (25分) ＋ 破底翻/均線糾結加分")
-    
+    with st.expander("📖 點擊展開：【量化評分標準與加分邏輯全覽】", expanded=False):
+        st.markdown("""
+        | 維度 | 評估核心 | 具體加分邏輯 | 滿分 |
+        | :--- | :--- | :--- | :---: |
+        | **1. 低基期乖離** | 防追高、抓起漲第一棒 | $\bullet$ 站上月線且乖離 $\le 8\%$（緊貼成本區）：**+25分**<br>$\bullet$ 乖離 $> 8\%$（已脫離成本區）：**+10分**<br>$\bullet$ 跌破月線：**0分** | 25分 |
+        | **2. 爆量攻擊** | 抓主力點火，避開高檔假金叉 | $\bullet$ 低檔金叉 ($K<65$) 且量放大 1.3 倍以上：**+25分**<br>$\bullet$ 低檔金叉但量能溫和：**+15分**<br>$\bullet$ 高檔鈍化續強：**+10分** | 25分 |
+        | **3. 產品定價權** | 產品利潤厚度 | $\bullet$ 最新毛利率 $\ge 30\%$：**+25分**<br>$\bullet$ 穩健毛利率 $15\% \sim 29.9\%$：**+15分** | 25分 |
+        | **4. 本業賺錢力** | 扣除費用後的實質獲利 | $\bullet$ 營業利益率 $> 10\%$：**+25分**<br>$\bullet$ 本業維持獲利 ($> 0\%$)：**+15分** | 25分 |
+        | **🔥 型態加分** | 主力洗盤結束突破 | $\bullet$ 命中【均線糾結突破】或【破底翻大底】：**額外加 +15分**<br>$\bullet$ 命中【VCP / 箱型 / N字突破】：**額外加 +10分** | Bonus |
+        """)
+
     col_ctrl1, col_ctrl2 = st.columns([1, 2])
     with col_ctrl1:
         min_vol_input = st.slider("最低成交量門檻 (張)", min_value=500, max_value=5000, value=1000, step=100)
@@ -178,111 +186,183 @@ with tab1:
         market_stocks = get_active_market_stocks()
         candidates = market_stocks[market_stocks['volume'] >= min_vol_input].sort_values(by="volume", ascending=False).head(scan_limit)
         
-        st.write(f"已從市場鎖定 **{len(candidates)} 檔** 動能標的進行【低基期起漲條件】量化計算...")
+        st.write(f"已從市場鎖定 **{len(candidates)} 檔** 動能標的進行深度評分解剖...")
         progress_bar = st.progress(0)
         ranking_list = []
+        detail_dict = {}  # 儲存每一檔的解剖明細
         
         for idx, (_, row) in enumerate(candidates.iterrows()):
             sid = str(row['id'])
             sname = name_map.get(sid, str(row['name']))
             sind = industry_map.get(sid, "其他板塊")
-            score = 0
-            features = []
+            
+            s_bias, s_vol_kd, s_gm, s_om, s_pat = 0, 0, 0, 0, 0
+            desc_bias, desc_vol_kd, desc_gm, desc_om, desc_pat = "", "", "", "", ""
+            curr_p = row['close']
+            target = curr_p * 1.08
+            stop = curr_p * 0.93
             
             try:
                 ticker, hist = get_stock_data(sid)
                 if not hist.empty and len(hist) >= 60:
                     hist = calculate_indicators(hist)
-                    curr_p = hist['Close'].iloc[-1]
-                    ma20 = hist['MA20'].iloc[-1]
-                    k_val = hist['K'].iloc[-1]
-                    d_val = hist['D'].iloc[-1]
+                    curr_p = round(hist['Close'].iloc[-1], 2)
+                    ma20 = round(hist['MA20'].iloc[-1], 2)
+                    k_val = round(hist['K'].iloc[-1], 1)
+                    d_val = round(hist['D'].iloc[-1], 1)
                     vol_today = hist['Volume'].iloc[-1]
                     vol_ma20 = hist['Volume'].rolling(20).mean().iloc[-1]
+                    vol_ratio = round(vol_today / vol_ma20, 2) if vol_ma20 > 0 else 1.0
                     
-                    # 1. 低基期乖離控制 (防追高，站上月線且距離月線不超過 8%)
-                    bias_ma20 = (curr_p - ma20) / ma20
-                    if 0 < bias_ma20 <= 0.08:
-                        score += 25
-                        features.append("低基期起漲(近月線)")
-                    elif bias_ma20 > 0.08:
-                        score += 10
-                        features.append("已脫離成本區(注意乖離)")
+                    # 1. 低基期乖離評分
+                    bias_pct = round(((curr_p - ma20) / ma20) * 100, 2)
+                    if 0 < (curr_p - ma20) / ma20 <= 0.08:
+                        s_bias = 25
+                        desc_bias = f"✅ 站上月線且乖離僅 {bias_pct}% (緊貼成本區，具備安全邊界)"
+                    elif (curr_p - ma20) / ma20 > 0.08:
+                        s_bias = 10
+                        desc_bias = f"⚠️ 站上月線但乖離達 {bias_pct}% (已脫離起漲區，需防短線拉回)"
+                    else:
+                        s_bias = 0
+                        desc_bias = f"❌ 跌破月線 (乖離 {bias_pct}%)，尚未進入多頭起漲軌道"
                     
-                    # 2. 量能點火與 KD 低檔金叉 (避開高檔假金叉)
+                    # 2. 量能與 KD 動能評分
                     is_vol_surge = vol_today >= (vol_ma20 * 1.3)
                     if k_val > d_val and k_val < 65:
                         if is_vol_surge:
-                            score += 25
-                            features.append("帶量低檔金叉(主力表態)")
+                            s_vol_kd = 25
+                            desc_vol_kd = f"✅ 低檔多頭金叉 (K:{k_val} > D:{d_val}) ＋ 今日量能放大至 {vol_ratio} 倍 (主力點火表態)"
                         else:
-                            score += 15
-                            features.append("低檔金叉(量能尚溫)")
+                            s_vol_kd = 15
+                            desc_vol_kd = f"🟡 低檔金叉 (K:{k_val} > D:{d_val}) 但量能僅均量 {vol_ratio} 倍 (動能尚在溫熱期)"
                     elif k_val > d_val:
-                        score += 10
-                        features.append("KD高檔續強")
-                    
-                    # 3. 基本面毛利指標
+                        s_vol_kd = 10
+                        desc_vol_kd = f"⚠️ KD 處於高檔多頭 (K:{k_val})，留意指標鈍化或短線修正"
+                    else:
+                        s_vol_kd = 0
+                        desc_vol_kd = f"❌ KD 呈現空頭死叉 (K:{k_val} < D:{d_val})，動能偏弱"
+
+                    # 3. 獲利毛利率評分
                     info = ticker.info
                     gm = info.get('grossMargins', 0)
                     om = info.get('operatingMargins', 0)
                     
                     if gm and gm >= 0.30:
-                        score += 25
-                        features.append(f"高毛利({round(gm*100, 1)}%)")
+                        s_gm = 25
+                        desc_gm = f"✅ 超高毛利率達 {round(gm*100, 1)}% (享有產品定價權與高護城河)"
                     elif gm and gm >= 0.15:
-                        score += 15
-                        features.append(f"穩健毛利({round(gm*100, 1)}%)")
+                        s_gm = 15
+                        desc_gm = f"🟡 穩健毛利率達 {round(gm*100, 1)}% (符合電子製造業健康水準)"
+                    else:
+                        s_gm = 0
+                        gm_disp = f"{round(gm*100, 1)}%" if gm else "低於15%"
+                        desc_gm = f"❌ 毛利率偏低 ({gm_disp})，利潤較薄"
 
-                    # 4. 本業營益率
+                    # 4. 本業營益率評分
                     if om and om > 0.10:
-                        score += 25
-                        features.append("營益率優良")
+                        s_om = 25
+                        desc_om = f"✅ 營益率達 {round(om*100, 1)}% (本業獲利體質極佳)"
                     elif om and om > 0:
-                        score += 15
-                        features.append("本業維持獲利")
+                        s_om = 15
+                        desc_om = f"🟡 本業維持獲利 (營益率 {round(om*100, 1)}%)"
+                    else:
+                        s_om = 0
+                        desc_om = "❌ 本業呈現微幅虧損或損益兩平"
                         
-                    # 5. 起漲型態加分 (Bonus)
-                    pat, target, stop = detect_pattern(hist)
+                    # 5. 起漲型態加分
+                    pat, pat_t, pat_s = detect_pattern(hist)
                     if "均線糾結" in pat or "破底翻" in pat:
-                        score += 15
-                        features.append(f"🔥極佳起漲型態:{pat}(+15分)")
+                        s_pat = 15
+                        target, stop = pat_t, pat_s
+                        desc_pat = f"🔥 命中頂級起漲型態：{pat}！籌碼沉澱完成後第一根表態突破"
                     elif pat != "":
-                        score += 10
-                        features.append(f"🔥突破型態:{pat}(+10分)")
+                        s_pat = 10
+                        target, stop = pat_t, pat_s
+                        desc_pat = f"🔥 命中突破型態：{pat}，短線動能強勁"
                     else:
                         target = curr_p * 1.08
                         stop = ma20
+                        desc_pat = "無特殊經典型態突破，以一般均線排列推進"
                 else:
-                    features.append("數據獲取中")
-                    curr_p = row['close']
-                    target = curr_p * 1.08
-                    stop = curr_p * 0.93
+                    desc_bias = "數據讀取不足"
             except Exception:
-                features.append("讀取異常")
-                curr_p = row['close']
-                target = curr_p * 1.08
-                stop = curr_p * 0.93
+                desc_bias = "讀取異常"
 
-            light = "🟢 超級起漲" if score >= 85 else ("🟡 潛力加溫" if score >= 65 else "⚪ 區間觀望")
+            total_score = s_bias + s_vol_kd + s_gm + s_om + s_pat
+            light = "🟢 超級起漲" if total_score >= 85 else ("🟡 潛力加溫" if total_score >= 65 else "⚪ 區間觀望")
+            
+            # 簡潔總表資料
             ranking_list.append({
                 "代號": sid,
                 "名稱": sname,
                 "產業類別": sind,
-                "綜合評分": score,
+                "綜合總分": total_score,
                 "狀態燈號": light,
-                "目前現價": round(curr_p, 2),
+                "目前現價": curr_p,
                 "短線目標價": round(target, 2),
                 "結構防守價": round(stop, 2),
-                "觸發特徵": "、".join(features)
+                "主要特徵標籤": desc_pat.split("：")[-1] if "🔥" in desc_pat else ("低基期起漲" if s_bias == 25 else "動能觀察")
             })
+            
+            # 完整解剖資料字典
+            detail_dict[f"{sid} {sname}"] = {
+                "現價": curr_p, "目標價": round(target, 2), "防守價": round(stop, 2),
+                "總分": total_score, "燈號": light, "產業": sind,
+                "細項得分": {
+                    "低基期乖離": (s_bias, 25, desc_bias),
+                    "爆量KD動能": (s_vol_kd, 25, desc_vol_kd),
+                    "產品毛利率": (s_gm, 25, desc_gm),
+                    "本業營益率": (s_om, 25, desc_om),
+                    "突破型態加分": (s_pat, 15, desc_pat)
+                }
+            }
             progress_bar.progress((idx + 1) / len(candidates))
 
-        df_rank = pd.DataFrame(ranking_list).sort_values(by="綜合評分", ascending=False).reset_index(drop=True)
-        st.success("✅ 掃描完成！以下為符合低基期起漲條件的領先個股：")
-        st.dataframe(df_rank, use_container_width=True)
+        st.session_state['scan_df'] = pd.DataFrame(ranking_list).sort_values(by="綜合總分", ascending=False).reset_index(drop=True)
+        st.session_state['scan_details'] = detail_dict
 
-# ==================== 分頁二：個股深度診斷 ====================
+    # 顯示掃描結果與明細點選
+    if 'scan_df' in st.session_state:
+        df_display = st.session_state['scan_df']
+        st.success(f"✅ 掃描完成！共評估 {len(df_display)} 檔活躍股，以下為乾淨排行榜：")
+        st.dataframe(df_display, use_container_width=True)
+
+        st.markdown("---")
+        st.subheader("🔍 點擊查看個股【得分解剖明細報告】")
+        
+        # 下拉選單選擇要看哪一檔的明細
+        stock_options = list(st.session_state['scan_details'].keys())
+        selected_stock = st.selectbox("請選擇欲深入查看得分解剖的股票：", stock_options)
+        
+        if selected_stock:
+            info_data = st.session_state['scan_details'][selected_stock]
+            
+            # 頂部戰情卡片
+            k1, k2, k3, k4, k5 = st.columns(5)
+            k1.metric("綜合量化總分", f"{info_data['總分']} 分", info_data['燈號'])
+            k2.metric("目前現價", f"${info_data['現價']}")
+            k3.metric("短線目標價", f"${info_data['目標價']}")
+            k4.metric("結構防守價", f"${info_data['防守價']}")
+            k5.metric("產業板塊", info_data['產業'])
+
+            st.write("#### 📊 五大維度具體得分與條件觸發原因：")
+            
+            # 依序條列各項指標具體拿分與說明
+            for cat_name, (score_val, max_val, reason_text) in info_data["細項得分"].items():
+                with st.container():
+                    c_badge, c_text = st.columns([1, 4])
+                    with c_badge:
+                        if score_val >= max_val * 0.8:
+                            st.success(f"**{cat_name}**：{score_val} / {max_val} 分")
+                        elif score_val > 0:
+                            st.warning(f"**{cat_name}**：{score_val} / {max_val} 分")
+                        else:
+                            st.error(f"**{cat_name}**：{score_val} / {max_val} 分")
+                    with c_text:
+                        st.markdown(f"👉 **觸發情況**：{reason_text}")
+                    st.divider()
+
+# ==================== 分頁二：個股深度技術診斷 ====================
 with tab2:
     target_stock = st.text_input("輸入要檢測的個股代號（例：3617, 2486, 2356）：", value="3617")
 
