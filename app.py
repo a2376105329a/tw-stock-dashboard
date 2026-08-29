@@ -4,9 +4,10 @@ import yfinance as yf
 import plotly.graph_objects as go
 import requests, io
 from datetime import datetime, timedelta
+import google.generativeai as genai
 
 st.set_page_config(page_title="台股低基期起漲量化戰情室", layout="wide")
-st.title("🎯 台股量化作戰室：低基期起漲 ＆ 雙軌籌碼追蹤 ＆ 法人估值診斷")
+st.title("🎯 台股量化作戰室：低基期起漲 ＆ AI 產業分析師 ＆ 估值診斷")
 
 INDUSTRY_MAP = {
     "半導體業": "半導體 / 先進製程 / 封測",
@@ -301,7 +302,7 @@ def get_stock_data(symbol):
             return ticker, hist
     return None, pd.DataFrame()
 
-tab1, tab2 = st.tabs(["🚀 低基期起漲掃描 ＆ 得分解剖", "🔍 個股搜尋 ＆ 法人產業估值診斷"])
+tab1, tab2 = st.tabs(["🚀 低基期起漲掃描 ＆ 得分解剖", "🔍 個股搜尋 ＆ AI分析 ＆ 估值診斷"])
 
 # ==================== 分頁一：起漲掃描榜與明細 ====================
 with tab1:
@@ -406,9 +407,9 @@ with tab1:
                         st.markdown(f"👉 **觸發情況**：\n{reason_text}")
                     st.divider()
 
-# ==================== 分頁二：個股搜尋 ＆ 法人產業估值診斷 ====================
+# ==================== 分頁二：個股搜尋 ＆ AI 業務解密 ＆ 估值診斷 ====================
 with tab2:
-    st.subheader("🔍 個股深度診斷 ＆ 雙軌籌碼追蹤 ＆ 法人產業估值模型")
+    st.subheader("🔍 個股深度診斷 ＆ AI 產業分析師 ＆ 估值模型")
     target_stock = st.text_input("請輸入台股代號（例：3617, 2486, 2356, 2303, 6278）：", value="3617")
 
     if target_stock:
@@ -418,7 +419,6 @@ with tab2:
             hist = calculate_indicators(hist)
             info = ticker_obj.info
             
-            # 自動對應出正確的完整股票名稱
             s_name = name_map.get(target_stock, "")
             display_title = f"{target_stock} {s_name}" if s_name else target_stock
             s_ind = industry_map.get(target_stock, "其他板塊")
@@ -445,7 +445,6 @@ with tab2:
                 val_mid = round(eps * pe_bench["mid"], 1)
                 val_high = round(eps * pe_bench["high"], 1)
 
-            # 在畫面上醒目顯示完整名稱與代號
             st.markdown(f"### 📌 當前檢測標的：**{display_title}**")
 
             k1, k2, k3, k4 = st.columns(4)
@@ -455,6 +454,40 @@ with tab2:
             k4.metric("近四季 EPS", f"{eps} 元" if eps else "無資料")
 
             st.info(f"🏢 **產業板塊歸屬**：{s_ind} ｜ **常態合理 P/E 區間**：{pe_bench['low']}X ~ {pe_bench['high']}X (中位數基準: {pe_bench['mid']}X)")
+
+            # ----------------- 🤖 Gemini AI 產業分析師專區 -----------------
+            st.markdown("---")
+            st.subheader(f"🤖 AI 產業分析師：{display_title} 業務解密")
+            
+            if "GEMINI_API_KEY" in st.secrets:
+                if st.button(f"✨ 點擊生成 {display_title} 深度業務與競爭力解析"):
+                    with st.spinner("AI 正在深度解析該公司業務模式、供應鏈地位與市場題材中..."):
+                        try:
+                            genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+                            
+                            # 提取官方英文簡介作為參考背景
+                            summary_en = info.get('longBusinessSummary', '無官方簡介')
+                            
+                            prompt = f"""
+                            請以台股專業操盤手與產業分析師的角度，針對台灣股票「{display_title}」（產業板塊：{s_ind}，近四季EPS：{eps}元，目前本益比：{curr_pe}倍）進行深度業務解析。
+                            參考英文業務背景：{summary_en}
+                            
+                            請分為以下三大區塊回答：
+                            1. **核心業務與主要產品**：這間公司到底靠什麼賺錢？主力產品或服務是什麼？
+                            2. **產業供應鏈地位**：它在該產業（{s_ind}）中是龍頭、中游供應商還是利基型黑馬？競爭對手或主要應用領域為何？
+                            3. **近期營運亮點或題材**：結合當前市場趨勢，它具備什麼題材或成長潛力？
+                            
+                            請使用繁體中文回答，語氣專業、精煉、條理分明，適合投資人快速掌握。
+                            """
+                            
+                            model = genai.GenerativeModel("gemini-2.5-flash")
+                            response = model.generate_content(prompt)
+                            
+                            st.markdown(response.text)
+                        except Exception as e:
+                            st.error(f"AI 生成報告發生錯誤：{e}")
+            else:
+                st.info("💡 提示：若想啟用「AI 產業分析師報告」，請至 Streamlit Cloud 的 Secrets 中設定您的 `GEMINI_API_KEY`。")
 
             st.markdown("---")
             st.subheader("🎯 目標價與估值空間解剖 (法人共識 ＆ 產業本益比推估)")
