@@ -448,4 +448,347 @@ with tab2:
                     """
                     model = genai.GenerativeModel("gemini-3.6-flash")
                     res = model.generate_content(prompt)
-                    cleaned_text = res.text.replace("```json", "").replace("
+                    cleaned_text = res.text.replace("```json", "").replace("```", "").strip()
+                    ai_tickers = json.loads(cleaned_text)
+                    
+                    theme_key = f"✨ {custom_theme_input}"
+                    DEFAULT_THEME_POOLS[theme_key] = ai_tickers
+                    st.success(f"✅ 成功新增題材【{theme_key}】！請在下方方格點擊查看。")
+                except Exception as e:
+                    st.error(f"AI 生成題材失敗：{e}")
+
+    st.markdown("---")
+    
+    if 'active_theme' not in st.session_state:
+        st.session_state['active_theme'] = list(DEFAULT_THEME_POOLS.keys())[0]
+
+    st.write("#### 🧱 點擊方格以切換檢視族群戰情：")
+    
+    themes_list = list(DEFAULT_THEME_POOLS.keys())
+    cols_per_row = 4
+    for i in range(0, len(themes_list), cols_per_row):
+        row_themes = themes_list[i:i + cols_per_row]
+        cols = st.columns(cols_per_row)
+        for j, theme_name in enumerate(row_themes):
+            with cols[j]:
+                is_selected = (st.session_state['active_theme'] == theme_name)
+                btn_label = f"📌 【選中】{theme_name}" if is_selected else theme_name
+                
+                if st.button(btn_label, use_container_width=True, key=f"tile_{theme_name}"):
+                    st.session_state['active_theme'] = theme_name
+
+    active_theme = st.session_state['active_theme']
+    st.markdown(f"### 📌 目前選中檢視板塊：**{active_theme}**")
+    
+    theme_tickers = DEFAULT_THEME_POOLS[active_theme]
+    
+    with st.spinner(f"正在計算【{active_theme}】族群即時行情與量化評分中..."):
+        theme_results = []
+        for tid in theme_tickers:
+            t_name = name_map.get(tid, tid)
+            try:
+                ticker, hist = get_stock_data(tid)
+                if not hist.empty and len(hist) >= 60:
+                    hist = calculate_indicators(hist)
+                    score, light, target, stop, details = evaluate_single_stock(ticker, hist, tid)
+                    curr_p = round(hist['Close'].iloc[-1], 2)
+                    prev_p = round(hist['Close'].iloc[-2], 2)
+                    pct_change = round(((curr_p - prev_p) / prev_p) * 100, 2)
+                    
+                    ma20 = hist['MA20'].iloc[-1]
+                    bias_ma20 = round(((curr_p - ma20) / ma20) * 100, 2)
+                    vol_today = int(hist['Volume'].iloc[-1] / 1000)
+                    
+                    theme_results.append({
+                        "代號": tid,
+                        "名稱": t_name,
+                        "今日收盤價": curr_p,
+                        "今日漲跌幅(%)": pct_change,
+                        "月線乖離率(%)": bias_ma20,
+                        "成交量(張)": vol_today,
+                        "量化總評分": score,
+                        "評分狀態": light,
+                        "短線目標價": target,
+                        "結構防守價": stop
+                    })
+            except Exception:
+                pass
+
+        if theme_results:
+            df_theme = pd.DataFrame(theme_results).sort_values(by="今日漲跌幅(%)", ascending=False).reset_index(drop=True)
+            
+            avg_pct = round(df_theme["今日漲跌幅(%)"].mean(), 2)
+            up_count = len(df_theme[df_theme["今日漲跌幅(%)"] > 0])
+            leader_stock = df_theme.iloc[0]["名稱"]
+            
+            heat_color = "🔥 強勢漲停/大漲" if avg_pct > 1.5 else ("🟢 溫和上漲" if avg_pct > 0 else "📉 整理回檔")
+            
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("族群平均漲跌幅", f"{avg_pct}%", heat_color)
+            c2.metric("族群上漲家數比", f"{up_count} / {len(df_theme)} 家")
+            c3.metric("今日最強領頭羊", f"{leader_stock}", f"+{df_theme.iloc[0]['今日漲跌幅(%)']}%")
+            
+            low_bias_candidates = df_theme[df_theme["月線乖離率(%)"] <= 8].sort_values(by="量化總評分", ascending=False)
+            best_pick = low_bias_candidates.iloc[0]["名稱"] if not low_bias_candidates.empty else "無(皆已脫離成本區)"
+            c4.metric("族群低基期推薦", f"{best_pick}")
+
+            st.markdown("---")
+            st.write(f"#### 📋 【{active_theme}】成分股量化數據對比表")
+            st.dataframe(df_theme, use_container_width=True)
+
+            st.markdown("#### 📊 成分股月線乖離率分佈 (尋找 $\le 8\%$ 安全起漲區)")
+            fig_bar = go.Figure()
+            colors = ['#2ca02c' if b <= 8 and b >= 0 else ('#ff7f0e' if b > 8 else '#d62728') for b in df_theme['月線乖離率(%)']]
+            fig_bar.add_trace(go.Bar(
+                x=df_theme['名稱'],
+                y=df_theme['月線乖離率(%)'],
+                marker_color=colors,
+                text=[f"{b}%" for b in df_theme['月線乖離率(%)']],
+                textposition='auto'
+            ))
+            fig_bar.add_hline(y=8, line_dash="dash", line_color="orange", annotation_text="8% 起漲安全邊界線")
+            fig_bar.add_hline(y=0, line_dash="solid", line_color="gray")
+            fig_bar.update_layout(height=350, margin=dict(l=20, r=20, t=20, b=20), yaxis_title="月線乖離率 (%)")
+            st.plotly_chart(fig_bar, use_container_width=True)
+        else:
+            st.error("目前讀取族群行情異常或查無對應成分股。")
+
+# ==================== 分頁三：個股深度診斷 ====================
+with tab3:
+    st.subheader("🔍 個股深度診斷 ＆ AI 產業分析師 ＆ 估值模型")
+    target_stock = st.text_input("請輸入台股代號（例：3617, 2486, 2356, 2303, 6278）：", value="3617")
+
+    if target_stock:
+        ticker_obj, hist = get_stock_data(target_stock)
+        
+        if not hist.empty and len(hist) >= 60:
+            hist = calculate_indicators(hist)
+            info = ticker_obj.info
+            
+            s_name = name_map.get(target_stock, "")
+            display_title = f"{target_stock} {s_name}" if s_name else target_stock
+            s_ind = industry_map.get(target_stock, "其他板塊")
+            
+            score, light, tech_target, tech_stop, details = evaluate_single_stock(ticker_obj, hist, target_stock)
+            
+            latest_price = round(hist['Close'].iloc[-1], 2)
+            prev_price = round(hist['Close'].iloc[-2], 2)
+            price_change = round(((latest_price - prev_price) / prev_price) * 100, 2)
+            
+            gm = round(info.get('grossMargins', 0) * 100, 2) if info.get('grossMargins') else "N/A"
+            om = round(info.get('operatingMargins', 0) * 100, 2) if info.get('operatingMargins') else "N/A"
+            eps = round(info.get('trailingEps', 0), 2) if info.get('trailingEps') else None
+            curr_pe = round(info.get('trailingPE', 0), 1) if info.get('trailingPE') else None
+            
+            analyst_target = info.get('targetMeanPrice')
+            analyst_high = info.get('targetHighPrice')
+            analyst_low = info.get('targetLowPrice')
+            
+            pe_bench = INDUSTRY_PE_BENCHMARK.get(s_ind, INDUSTRY_PE_BENCHMARK["其他板塊"])
+            val_low, val_mid, val_high = None, None, None
+            if eps and eps > 0:
+                val_low = round(eps * pe_bench["low"], 1)
+                val_mid = round(eps * pe_bench["mid"], 1)
+                val_high = round(eps * pe_bench["high"], 1)
+
+            st.markdown(f"### 📌 當前檢測標的：**{display_title}**")
+
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("綜合量化評分", f"{score} 分", light)
+            k2.metric("最新收盤價", f"${latest_price}", f"{price_change}%")
+            k3.metric("目前本益比 (P/E)", f"{curr_pe} 倍" if curr_pe else "N/A")
+            k4.metric("近四季 EPS", f"{eps} 元" if eps else "無資料")
+
+            st.info(f"🏢 **產業板塊歸屬**：{s_ind} ｜ **常態合理 P/E 區間**：{pe_bench['low']}X ~ {pe_bench['high']}X (中位數基準: {pe_bench['mid']}X)")
+
+            st.markdown("---")
+            st.subheader(f"🤖 AI 產業分析師：{display_title} 業務解密")
+            
+            if "GEMINI_API_KEY" in st.secrets:
+                if st.button(f"✨ 點擊生成 {display_title} 深度業務與競爭力解析"):
+                    with st.spinner("AI 正在深度解析該公司業務模式、供應鏈地位與市場題材中..."):
+                        try:
+                            genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+                            summary_en = info.get('longBusinessSummary', '無官方簡介')
+                            
+                            prompt = f"""
+                            請以台股專業操盤手與產業分析師的角度，針對台灣股票「{display_title}」（產業板塊：{s_ind}，近四季EPS：{eps}元，目前本益比：{curr_pe}倍）進行深度業務解析。
+                            參考英文業務背景：{summary_en}
+                            
+                            請分為以下四大區塊回答：
+                            1. **核心業務與主要產品**：這間公司到底靠什麼賺錢？主力產品或服務是什麼？
+                            2. **產業供應鏈地位與 AI 關聯性**：它在該產業（{s_ind}）中是龍頭、中游供應商還是利基型黑馬？特別說明它與當前 AI 浪潮是否有高度相關？在 AI 興起的階段，它是否有成功搭上順風車？
+                            3. **AI 供應鏈中的角色（上中下游）**：若與 AI 相關，它屬於上游（如關鍵零組件、矽智財、晶圓代工）、中游（如伺服器組裝、散熱、PCB、機殼、CPO光通訊）還是下游應用？若與 AI 無關，其主要核心應用領域為何？
+                            4. **近期營運亮點或題材**：結合當前市場趨勢，它具備什麼題材或成長潛力？
+                            
+                            請使用繁體中文回答，語氣專業、精煉、條理分明，適合投資人快速掌握。
+                            """
+                            
+                            model = genai.GenerativeModel("gemini-3.6-flash")
+                            response = model.generate_content(prompt)
+                            st.markdown(response.text)
+                        except Exception as e:
+                            st.error(f"AI 生成報告發生錯誤：{e}")
+            else:
+                st.info("💡 提示：若想啟用專屬 AI 分析報告，請至 Streamlit Cloud 的 Secrets 中設定您的 `GEMINI_API_KEY`。")
+
+            st.markdown("---")
+            st.subheader("🎯 目標價與估值空間解剖 (法人共識 ＆ 產業本益比推估)")
+            
+            v_col1, v_col2, v_col3 = st.columns(3)
+            with v_col1:
+                st.markdown("#### 🏢 法人機構目標價")
+                if analyst_target:
+                    upside_analyst = round(((analyst_target - latest_price) / latest_price) * 100, 1)
+                    st.metric("法人共識平均目標價", f"${round(analyst_target, 1)}", f"潛在空間: {upside_analyst}%")
+                    st.caption(f"法人預估區間：**${round(analyst_low, 1)} ~ ${round(analyst_high, 1)}**" if analyst_high else "")
+                else:
+                    st.info("法人目前尚無公開共識目標價。")
+
+            with v_col2:
+                st.markdown(f"#### 🏭 產業 P/E 估值推算")
+                if val_mid:
+                    upside_pe = round(((val_mid - latest_price) / latest_price) * 100, 1)
+                    st.metric(f"產業合理目標價 ({pe_bench['mid']}X)", f"${val_mid}", f"潛在空間: {upside_pe}%")
+                    st.caption(f"估值河流區間：保守 **${val_low}** ～ 樂觀 **${val_high}**")
+                else:
+                    st.info("因近四季 EPS 為負或無資料，無法進行本益比推算。")
+
+            with v_col3:
+                st.markdown("#### 📐 技術線型結構點位")
+                upside_tech = round(((tech_target - latest_price) / latest_price) * 100, 1)
+                st.metric("波段技術壓力目標價", f"${tech_target}", f"潛在空間: {upside_tech}%")
+                st.caption(f"關鍵停損防守價：**${tech_stop}**")
+
+            st.markdown("---")
+            with st.expander(f"📋 點擊查看【{display_title}】六大維度得分解剖與雙軌籌碼追蹤", expanded=True):
+                for cat_name, (score_val, max_val, reason_text) in details.items():
+                    c_badge, c_text = st.columns([1, 4])
+                    with c_badge:
+                        if score_val >= max_val * 0.8:
+                            st.success(f"**{cat_name}**：{score_val} / {max_val} 分")
+                        elif score_val > 0:
+                            st.warning(f"**{cat_name}**：{score_val} / {max_val} 分")
+                        else:
+                            st.error(f"**{cat_name}**：{score_val} / {max_val} 分")
+                    with c_text:
+                        st.markdown(f"👉 **觸發情況**：\n{reason_text}")
+                    st.divider()
+
+            st.subheader(f"📈 {display_title} 技術線型 (日K / MA5 / MA10 / MA20 / MA60)")
+            fig = go.Figure()
+            fig.add_trace(go.Candlestick(
+                x=hist.index, open=hist['Open'], high=hist['High'],
+                low=hist['Low'], close=hist['Close'], name='日K線'
+            ))
+            fig.add_trace(go.Scatter(x=hist.index, y=hist['MA5'], line=dict(color='orange', width=1.2), name='5MA'))
+            fig.add_trace(go.Scatter(x=hist.index, y=hist['MA10'], line=dict(color='purple', width=1.2), name='10MA'))
+            fig.add_trace(go.Scatter(x=hist.index, y=hist['MA20'], line=dict(color='blue', width=2), name='20MA (月線)'))
+            fig.add_trace(go.Scatter(x=hist.index, y=hist['MA60'], line=dict(color='green', width=1.5), name='60MA (季線)'))
+            fig.update_layout(xaxis_rangeslider_visible=False, height=450, margin=dict(l=20, r=20, t=20, b=20))
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.error("查無此代號技術數據或歷史長度不足 60 天，請確認代號是否正確。")
+
+# ==================== 分頁四：個人持股戰情室 ====================
+with tab4:
+    st.subheader("💼 個人持股部位戰情室 ＆ 智慧操作建議")
+    st.caption("戰略應用：在此輸入您目前擁有的持股與成本，系統將即時比對量化評分與防守價，為您提供續抱、加碼或停損建議！")
+    
+    if 'my_portfolio' not in st.session_state:
+        st.session_state['my_portfolio'] = pd.DataFrame([
+            {"代號": "3617", "張數": 2, "成本價": 320.0},
+            {"代號": "2486", "張數": 5, "成本價": 135.0}
+        ])
+
+    st.write("#### 📝 輸入或編輯您的庫存清單：")
+    edited_portfolio = st.data_editor(
+        st.session_state['my_portfolio'],
+        num_rows="dynamic",
+        use_container_width=True,
+        column_config={
+            "代號": st.column_config.TextColumn("股票 4 位數代號", max_chars=4, required=True),
+            "張數": st.column_config.NumberColumn("持有張數", min_value=0.1, step=1, required=True),
+            "成本價": st.column_config.NumberColumn("每股平均成本 (元)", min_value=0.1, step=0.1, required=True)
+        }
+    )
+    st.session_state['my_portfolio'] = edited_portfolio
+
+    if st.button("🚀 開始檢測與診斷我的持股部位"):
+        if edited_portfolio.empty:
+            st.warning("請先在上方表格輸入至少一筆持股資料。")
+        else:
+            with st.spinner("正在連線即時股價、計算未實現損益與量化評分中..."):
+                results = []
+                total_cost_all = 0
+                total_market_all = 0
+                
+                for _, row in edited_portfolio.iterrows():
+                    sid = str(row['代號']).strip()
+                    shares = float(row['張數'])
+                    cost = float(row['成本價'])
+                    
+                    if len(sid) != 4:
+                        continue
+                        
+                    sname = name_map.get(sid, sid)
+                    
+                    try:
+                        ticker_obj, hist = get_stock_data(sid)
+                        if not hist.empty and len(hist) >= 60:
+                            hist = calculate_indicators(hist)
+                            score, light, target, stop, details = evaluate_single_stock(ticker_obj, hist, sid)
+                            curr_p = round(hist['Close'].iloc[-1], 2)
+                            
+                            market_val = curr_p * shares * 1000
+                            cost_val = cost * shares * 1000
+                            pnl = market_val - cost_val
+                            pnl_pct = round(((curr_p - cost) / cost) * 100, 2)
+                            
+                            total_cost_all += cost_val
+                            total_market_all += market_val
+                            
+                            advice = "🟢 續抱/多頭排列"
+                            if curr_p < stop:
+                                advice = "🚨 跌破防守價，建議停損"
+                            elif score >= 85 and pnl_pct > 0:
+                                advice = "🔥 強勢飆股，可續抱或沿月線加碼"
+                            elif score < 60:
+                                advice = "⚠️ 量化評分偏低，留意回檔風險"
+                            elif pnl_pct <= -10:
+                                advice = "⚠️ 虧損達 10%，檢視是否觸及停損點"
+
+                            results.append({
+                                "代號": sid,
+                                "名稱": sname,
+                                "持股張數": shares,
+                                "平均成本": cost,
+                                "即時現價": curr_p,
+                                "未實現損益(元)": int(pnl),
+                                "報酬率(%)": pnl_pct,
+                                "量化總分": score,
+                                "結構防守價": stop,
+                                "操盤建議": advice
+                            })
+                    except Exception:
+                        pass
+
+                if results:
+                    df_res = pd.DataFrame(results)
+                    total_pnl = total_market_all - total_cost_all
+                    total_pnl_pct = round((total_pnl / total_cost_all) * 100, 2) if total_cost_all > 0 else 0
+                    
+                    st.markdown("---")
+                    st.subheader("📊 庫存資產總覽")
+                    rc1, rc2, rc3 = st.columns(3)
+                    rc1.metric("總持股市值", f"${int(total_market_all):,}")
+                    rc2.metric("總投入成本", f"${int(total_cost_all):,}")
+                    rc3.metric("總未實現損益", f"${int(total_pnl):,}", f"{total_pnl_pct}%", delta_color="normal" if total_pnl >= 0 else "inverse")
+
+                    st.markdown("---")
+                    st.subheader("📋 個股部位戰略體檢表")
+                    st.dataframe(df_res, use_container_width=True)
+                    
+                    st.success("💡 **操盤心法提醒**：若個股出現「🚨 跌破防守價，建議停損」或量化總分掉到 60 分以下，請果斷執行紀律，將資金轉往起漲掃描榜中的高分標的！")
+                else:
+                    st.error("無法讀取持股資料，請確認輸入的 4 位數台股代號是否正確。")
