@@ -346,7 +346,6 @@ def get_stock_data(symbol):
             return ticker, hist
     return None, pd.DataFrame()
 
-# 六大分頁架構
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🚀 起漲掃描", "🔥 AI 題材", "🔍 個股診斷", "💼 個人持股", "🌐 國際與新聞雷達", "💎 甜甜價低基期潛伏"])
 
 # ==================== 分頁一：起漲掃描榜 ====================
@@ -784,7 +783,7 @@ with tab4:
                             elif score < 60:
                                 advice = "⚠️ 量化評分偏低，留意回檔風險"
                             elif pnl_pct <= -10:
-                                advice = "⚠️ 虧損達 10%，檢視是否觸及停損點"
+                                advice = "⚠️ 虧損達 10%, 檢視是否觸及停損點"
 
                             results.append({
                                 "代號": sid,
@@ -905,7 +904,7 @@ with tab5:
 # ==================== 分頁六：甜甜價低基期潛伏榜 ====================
 with tab6:
     st.subheader("💎 甜甜價低基期潛伏榜 (左側打底 ＆ 潛力挖寶專區)")
-    st.caption("戰略應用：專門為喜愛『買在無人問津時』的投資人設計！系統自動篩選【位階極低、正在築底整理、毛利率健康】但隨時準備等待主流點火的潛力標的。")
+    st.caption("戰略應用：專門為喜愛『買在無人問津時』的投資人設計！系統自動篩選【位階極低、籌碼沉澱、毛利率健康】但隨時準備等待主流點火的潛力標的。")
 
     col_sweet1, col_sweet2 = st.columns([1, 2])
     with col_sweet1:
@@ -935,14 +934,16 @@ with tab6:
                         
                         bias_ma20 = round(((curr_p - ma20) / ma20) * 100, 2)
                         
-                        # 甜甜價過濾條件：股價貼在月線上下 (-5% ~ +4%) 且高於季線或在季線附近 (正在打底)
                         if -5.0 <= bias_ma20 <= 4.0 and curr_p >= ma60 * 0.90:
                             info = ticker.info
                             gm = info.get('grossMargins', 0)
                             om = info.get('operatingMargins', 0)
                             
-                            # 體質過濾：毛利率 > 20% 且本業有賺錢
                             if gm and gm >= 0.20 and om and om > 0:
+                                # 加入籌碼過濾器
+                                s_chip, desc_chip = get_real_chip_data(sid)
+                                chip_status = "🔥 大戶/法人偷偷吸籌" if s_chip >= 15 else ("🟡 籌碼中性穩定" if s_chip >= 8 else "⚠️ 籌碼發散")
+                                
                                 sweet_list.append({
                                     "代號": sid,
                                     "名稱": sname,
@@ -950,6 +951,7 @@ with tab6:
                                     "目前現價": curr_p,
                                     "月線乖離率(%)": bias_ma20,
                                     "毛利率(%)": round(gm * 100, 1),
+                                    "籌碼狀態": chip_status,
                                     "潛伏狀態": "🟢 築底完成等待點火" if -2 <= bias_ma20 <= 2 else "🟡 接近月線甜甜價"
                                 })
                 except Exception:
@@ -958,8 +960,8 @@ with tab6:
 
             if sweet_list:
                 df_sweet = pd.DataFrame(sweet_list).sort_values(by="月線乖離率(%)", ascending=True).reset_index(drop=True)
-                st.success(f"✅ 掃描完成！共挑選出 {len(df_sweet)} 檔位階極低、基本面健康的甜甜價潛伏標的：")
+                st.success(f"✅ 掃描完成！共挑選出 {len(df_sweet)} 檔籌碼沉澱且基本面健康的甜甜價潛伏標的：")
                 st.dataframe(df_sweet, use_container_width=True)
-                st.markdown("💡 **左側操盤心法**：這些股票目前基期極低（月線乖離在正負 5% 內），沒有追高風險。建議搭配分頁三的估值診斷，分批在月線或季線附近逢低佈局，耐心等待題材發動！")
+                st.markdown("💡 **左側操盤心法**：這些股票目前基期極低（月線乖離在正負 5% 內），沒有追高風險。若籌碼狀態顯示「🔥 大戶偷偷吸籌」，建議分批在月線或季線附近逢低佈局，耐心等待題材發動！")
             else:
                 st.warning("目前條件下較少符合嚴格打底條件的標的，可嘗試降低成交量門檻或稍後再試。")
