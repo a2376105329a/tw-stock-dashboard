@@ -35,7 +35,7 @@ if not check_password():
     st.stop()
 # -------------------------
 
-st.title("🎯 台股量化作戰室：低基期起漲 ＆ 國際連動風向 ＆ AI 估值與持股戰情室")
+st.title("🎯 台股量化作戰室：起漲掃描 ＆ 甜甜價潛伏 ＆ 國際新聞雷達 ＆ 戰情室")
 
 DEFAULT_THEME_POOLS = {
     "🌐 CPO 光通訊 / 矽光子": ["6442", "3450", "4979", "3163", "6451", "3081", "4908"],
@@ -346,7 +346,8 @@ def get_stock_data(symbol):
             return ticker, hist
     return None, pd.DataFrame()
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["🚀 起漲掃描", "🔥 AI 題材", "🔍 個股診斷", "💼 個人持股", "🌐 國際連動與期指風向"])
+# 六大分頁架構
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🚀 起漲掃描", "🔥 AI 題材", "🔍 個股診斷", "💼 個人持股", "🌐 國際與新聞雷達", "💎 甜甜價低基期潛伏"])
 
 # ==================== 分頁一：起漲掃描榜 ====================
 with tab1:
@@ -432,7 +433,7 @@ with tab1:
             k1.metric("綜合量化總分", f"{info_data['總分']} 分", info_data['燈號'])
             k2.metric("目前現價", f"${info_data['現價']}")
             k3.metric("短線目標價", f"${info_data['目標價']}")
-            k4.metric("結構防守價", f"${info_data['防守價']}")
+            k4.metric("結構防守價", f"${info_data['結構防守價']}")
 
             st.info(f"🏢 **產業板塊歸屬**：{info_data['產業']}")
 
@@ -454,7 +455,7 @@ with tab1:
 # ==================== 分頁二：AI 智慧題材方格儀表板 ====================
 with tab2:
     st.subheader("🔥 AI 智慧題材板塊 ＆ 族群熱力方格戰情室")
-    st.caption("戰略應用：點擊下方任何一個【題材方格卡片】，即可立刻載入該族群的詳細個股量化對比與起漲推薦！")
+    st.caption("戰略應用：點擊下方任何一個【題材方格卡片】, 即可立刻載入該族群的詳細個股量化對比與起漲推薦！")
     
     with st.expander("✨ 找不到想看的題材？點此使用 AI 動態新增自訂題材池", expanded=False):
         c_in1, c_in2 = st.columns([3, 1])
@@ -471,7 +472,7 @@ with tab2:
                     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
                     prompt = f"""
                     請列出台灣股市（台股）中與「{custom_theme_input}」高度相關的 5 到 8 間代表性上市公司或上櫃公司的【4位數股票代號】。
-                    請直接回傳一個純 JSON 格式的 4 位數代號字串陣列（List of string），例如：["6488", "3532", "6182"]。不要包含任何額外的文字或 Markdown 標記。
+                    請直接回傳一個純 JSON 格式的 4 位數代號字串陣列（List of string）, 例如：["6488", "3532", "6182"]。不要包含任何額外的文字或 Markdown 標記。
                     """
                     model = genai.GenerativeModel("gemini-3.6-flash")
                     res = model.generate_content(prompt)
@@ -820,23 +821,26 @@ with tab4:
                 else:
                     st.error("無法讀取持股資料，請確認輸入的 4 位數台股代號是否正確。")
 
-# ==================== 分頁五：國際連動與期指風向 ====================
+# ==================== 分頁五：國際巨頭與突發新聞雷達 ====================
 with tab5:
-    st.subheader("🌐 國際股市 ＆ 台指期夜盤連動風向球")
-    st.caption("戰略應用：透過美、日、韓及台指期夜盤的領先表現，由 AI 為您即時推演隔日台股對應買入的潛力族群與標的！")
+    st.subheader("🌐 國際產業巨頭 ＆ 突發新聞/重大利空雷達狙擊室")
+    st.caption("戰略應用：結合全球領先巨頭（安森美、村田、美光等）即時表現，並透過 AI 掃描台股近期突發新聞與市場傳聞，精準點名隔日買入或避開標的！")
 
-    if st.button("🌍 取得國際即時行情與 AI 隔日台股連動推演"):
-        with st.spinner("正在連線美、日、韓及期指夜盤最新報價中..."):
+    news_query = st.text_input("🔍 輸入想查詢突發新聞的股票或主題（例如：『欣興』、『台積電 設備』、『記憶體傳聞』）：", value="欣興 載板")
+
+    if st.button("🚀 執行國際巨頭行情與突發新聞 AI 狙擊分析"):
+        with st.spinner("正在連線全球巨頭報價、並透過 AI 搜尋與解讀最新突發新聞中..."):
             try:
-                global_tickers = {
-                    "台指期近月 (TX)": "^TWII",
-                    "費城半導體 (SOX)": "^SOX",
-                    "日經 225 (N225)": "^N225",
-                    "韓國綜合 (KOSPI)": "^KS11"
+                global_giants = {
+                    "🇺🇸 安森美 (ONsemi - 功率半導體)": "ON",
+                    "🇯🇵 村田製作所 (Murata - 被動元件)": "6981.T",
+                    "🇺🇸 美光科技 (Micron - 記憶體)": "MU",
+                    "🇺🇸 輝達 (NVIDIA - AI總司令)": "NVDA",
+                    "🇯🇵 東京威力科創 (TEL - 設備)": "8035.T"
                 }
                 
-                global_data = []
-                for name, symbol in global_tickers.items():
+                giant_data = []
+                for name, symbol in global_giants.items():
                     t = yf.Ticker(symbol)
                     hist = t.history(period="5d")
                     if not hist.empty:
@@ -844,53 +848,118 @@ with tab5:
                         curr = round(hist['Close'].iloc[-1], 2)
                         prev = round(hist['Close'].iloc[-2], 2)
                         change_pct = round(((curr - prev) / prev) * 100, 2)
-                        global_data.append({"國際市場指標": name, "最新收盤/指數": curr, "日漲跌幅(%)": change_pct})
+                        giant_data.append({"國際產業巨頭": name, "最新收盤價": curr, "日漲跌幅(%)": change_pct})
 
-                df_global = pd.DataFrame(global_data)
+                df_giant = pd.DataFrame(giant_data)
                 
-                g1, g2, g3, g4 = st.columns(4)
-                cols_metric = [g1, g2, g3, g4]
-                for idx, row in df_global.iterrows():
-                    with cols_metric[idx]:
-                        st.metric(row["國際市場指標"], row["最新收盤/指數"], f"{row['日漲跌幅(%)']}%")
+                st.write("#### 📊 全球產業領先巨頭最新表現：")
+                st.dataframe(df_giant, use_container_width=True)
 
                 st.markdown("---")
-                st.subheader("🤖 AI 國際連動與台股隔日佈局推演報告")
+                st.subheader("🤖 AI 跨國連動 ＆ 突發消息衝擊評估報告")
                 
                 if "GEMINI_API_KEY" in st.secrets:
-                    with st.spinner("AI 正在深度解析國際指數強弱，並推演隔日台股連動受惠股中..."):
+                    with st.spinner(f"AI 正在結合國際巨頭走勢，並針對【{news_query}】進行近期新聞/事件與股價影響深度解析中..."):
                         genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
                         
-                        summary_str = df_global.to_string(index=False)
+                        summary_str = df_giant.to_string(index=False)
                         prompt = f"""
-                        請以台股專業操盤手與總體經濟分析師的角度，根據以下國際領先指標的最新表現：
+                        請以台股資深操盤手與風險管理專家的角度，根據以下兩大資訊為投資人進行盤前狙擊分析：
+                        
+                        一、全球關鍵產業巨頭最新表現：
                         {summary_str}
                         
-                        請為投資人進行隔日台股開盤風向推演，並回答以下三大重點：
-                        1. **國際盤勢解讀**：美、日、韓及期指目前的強弱勢代表了什麼國際資金動向？
-                        2. **台股連動受惠族群與連動邏輯**：基於上述國際表現，明天台股哪些次產業（例如半導體、AI伺服器、記憶體、CPO、被動元件等）最容易受到激勵而領漲？
-                        3. **具體買入操盤建議**：明天開盤後，投資人應該尋找什麼樣的技術特徵（例如低基期、月線附近、帶量突破）進行卡位或買入？
+                        二、使用者關注的特定突發新聞/個股/主題：
+                        「{news_query}」（例如近期市場傳聞、高層異動、突發利空或利多消息）
                         
-                        請使用繁體中文回答，語氣專業、精煉、條理分明。
+                        請為投資人提供一份精準的盤前作戰指南，必須包含以下四大區塊：
+                        1. **國際資金風向**：跨國巨頭的漲跌代表資金正在湧入哪個次產業？
+                        2. **突發消息面衝擊解讀**：針對「{news_query}」，評估該消息對相關台股供應鏈是「實質利空（需避開/停損）」還是「市場過度恐慌的超跌買點」？
+                        3. **台股供應鏈映射與具體點名**：結合國際連動與消息面，明天的台股開盤具體建議買入或關注哪 2 檔台股代號與名稱？
+                        4. **操盤紀律叮嚀**：提供明確的進場或防守點位建議。
+                        
+                        請使用繁體中文回答，語氣專業、犀利、條理分明。
                         """
                         
                         model = genai.GenerativeModel("gemini-3.6-flash")
                         response = model.generate_content(prompt)
                         st.markdown(response.text)
                 else:
-                    st.info("💡 提示：若想啟用 AI 國際連動報告，請至 Streamlit Cloud 的 Secrets 中設定您的 `GEMINI_API_KEY`。")
+                    st.info("💡 提示：若想啟用 AI 狙擊報告，請至 Streamlit Cloud 的 Secrets 中設定您的 `GEMINI_API_KEY`。")
 
                 st.markdown("---")
-                st.write("#### 🔗 跨國市場強弱與台股連動對照表 (操盤手心法)")
+                st.write("#### 🎯 經典國際巨頭 ➔ 台股買入對照對應表 (操盤手私房筆記)")
                 st.markdown("""
-                * **美股費半 (SOX) 大漲 / 費半成分股強勢**：
-                  * ➡️ **台股連動標的**：台積電 (2330)、日月光投控 (3711)、弘塑 (3131)、辛耘 (3583) 等先進製程與設備股。
-                * **美股 AI 伺服器 / 科技巨頭大漲 (如 Dell, Supermicro)**：
-                  * ➡️ **台股連動標的**：廣達 (2382)、緯創 (3231)、緯穎 (6669)、奇鋐 (3017)、雙鴻 (3324)。
-                * **韓國股市 (KOSPI) / 記憶體族群強勢**：
-                  * ➡️ **台股連動標的**：南亞科 (2408)、華邦電 (2344)、群聯 (8299)、威剛 (3260)。
-                * **日經指數 (N225) / 日本重電與自動化強勢**：
-                  * ➡️ **台股連動標的**：華城 (1519)、士電 (1503)、亞力 (1514)。
+                * **🇺🇸 安森美 (ON) 大漲 ➡️ 買入台股功率半導體**：
+                  * 點名觀察：台半 (5425)、強茂 (2481)、漢磊 (3707)。
+                * **🇯🇵 村田製作所 (6981.T) 大漲 ➡️ 買入台股被動元件**：
+                  * 點名觀察：國巨 (2327)、華新科 (2492)、日電貿 (3090)。
+                * **🇺🇸 美光 (MU) 大漲 ➡️ 買入台股記憶體與模組**：
+                  * 點名觀察：南亞科 (2408)、華邦電 (2344)、威剛 (3260)、十銓 (4967)。
+                * **🇯🇵 東京威力科創 (8035.T) 大漲 ➡️ 買入台股先進封裝設備**：
+                  * 點名觀察：弘塑 (3131)、辛耘 (3583)、萬潤 (6187)。
                 """)
             except Exception as e:
-                st.error(f"抓取國際行情或生成 AI 報告發生錯誤：{e}")
+                st.error(f"抓取國際巨頭行情或生成 AI 報告發生錯誤：{e}")
+
+# ==================== 分頁六：甜甜價低基期潛伏榜 ====================
+with tab6:
+    st.subheader("💎 甜甜價低基期潛伏榜 (左側打底 ＆ 潛力挖寶專區)")
+    st.caption("戰略應用：專門為喜愛『買在無人問津時』的投資人設計！系統自動篩選【位階極低、正在築底整理、毛利率健康】但隨時準備等待主流點火的潛力標的。")
+
+    col_sweet1, col_sweet2 = st.columns([1, 2])
+    with col_sweet1:
+        sweet_vol = st.slider("潛伏榜最低成交量 (張)", min_value=300, max_value=3000, value=800, step=100)
+        sweet_limit = st.slider("潛伏掃描候選數量", min_value=15, max_value=50, value=30, step=5)
+
+    if st.button("💎 開始掃描全市場【甜甜價潛伏股】"):
+        with st.spinner("正在過濾市場中位階在月線/季線附近、籌碼沉澱的打底標的..."):
+            market_stocks = get_active_market_stocks()
+            candidates = market_stocks[market_stocks['volume'] >= sweet_vol].sort_values(by="volume", ascending=False).head(sweet_limit)
+            
+            sweet_list = []
+            progress_bar_s = st.progress(0)
+            
+            for idx, (_, row) in enumerate(candidates.iterrows()):
+                sid = str(row['id'])
+                sname = name_map.get(sid, str(row['name']))
+                sind = industry_map.get(sid, "其他板塊")
+                
+                try:
+                    ticker, hist = get_stock_data(sid)
+                    if not hist.empty and len(hist) >= 60:
+                        hist = calculate_indicators(hist)
+                        curr_p = round(hist['Close'].iloc[-1], 2)
+                        ma20 = hist['MA20'].iloc[-1]
+                        ma60 = hist['MA60'].iloc[-1]
+                        
+                        bias_ma20 = round(((curr_p - ma20) / ma20) * 100, 2)
+                        
+                        # 甜甜價過濾條件：股價貼在月線上下 (-5% ~ +4%) 且高於季線或在季線附近 (正在打底)
+                        if -5.0 <= bias_ma20 <= 4.0 and curr_p >= ma60 * 0.90:
+                            info = ticker.info
+                            gm = info.get('grossMargins', 0)
+                            om = info.get('operatingMargins', 0)
+                            
+                            # 體質過濾：毛利率 > 20% 且本業有賺錢
+                            if gm and gm >= 0.20 and om and om > 0:
+                                sweet_list.append({
+                                    "代號": sid,
+                                    "名稱": sname,
+                                    "產業類別": sind,
+                                    "目前現價": curr_p,
+                                    "月線乖離率(%)": bias_ma20,
+                                    "毛利率(%)": round(gm * 100, 1),
+                                    "潛伏狀態": "🟢 築底完成等待點火" if -2 <= bias_ma20 <= 2 else "🟡 接近月線甜甜價"
+                                })
+                except Exception:
+                    pass
+                progress_bar_s.progress((idx + 1) / len(candidates))
+
+            if sweet_list:
+                df_sweet = pd.DataFrame(sweet_list).sort_values(by="月線乖離率(%)", ascending=True).reset_index(drop=True)
+                st.success(f"✅ 掃描完成！共挑選出 {len(df_sweet)} 檔位階極低、基本面健康的甜甜價潛伏標的：")
+                st.dataframe(df_sweet, use_container_width=True)
+                st.markdown("💡 **左側操盤心法**：這些股票目前基期極低（月線乖離在正負 5% 內），沒有追高風險。建議搭配分頁三的估值診斷，分批在月線或季線附近逢低佈局，耐心等待題材發動！")
+            else:
+                st.warning("目前條件下較少符合嚴格打底條件的標的，可嘗試降低成交量門檻或稍後再試。")
