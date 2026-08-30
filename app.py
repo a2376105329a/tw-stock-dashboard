@@ -213,14 +213,15 @@ def get_real_chip_data(symbol):
             data_inst = res_inst.json().get("data", [])
             if data_inst:
                 df_inst = pd.DataFrame(data_inst)
-                df_inst['net'] = pd.to_numeric(df_inst['buy'], errors='coerce') - pd.to_numeric(df_inst['sell'], errors='coerce')
-                recent_net = df_inst.tail(5)['net'].sum()
-                if recent_net > 500:
-                    track_b_score = 10
-                    desc_b = f"✅ 三大法人近期強力買超 (5日累計淨買超 +{int(recent_net)} 張)"
-                elif recent_net < -500:
-                    track_b_score = 2
-                    desc_b = f"❌ 三大法人近期呈現調節賣超 (5日累計淨買超 {int(recent_net)} 張)"
+                if 'buy' in df_inst.columns and 'sell' in df_inst.columns:
+                    df_inst['net'] = pd.to_numeric(df_inst['buy'], errors='coerce') - pd.to_numeric(df_inst['sell'], errors='coerce')
+                    recent_net = df_inst.tail(5)['net'].sum()
+                    if recent_net > 500:
+                        track_b_score = 10
+                        desc_b = f"✅ 三大法人近期強力買超 (5日累計淨買超 +{int(recent_net)} 張)"
+                    elif recent_net < -500:
+                        track_b_score = 2
+                        desc_b = f"❌ 三大法人近期呈現調節賣超 (5日累計淨買超 {int(recent_net)} 張)"
         
         url_share = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockShareholding&data_id={symbol}&start_date={start_date}&end_date={end_date}"
         res_share = requests.get(url_share, timeout=5)
@@ -228,14 +229,23 @@ def get_real_chip_data(symbol):
             data_share = res_share.json().get("data", [])
             if data_share:
                 df_share = pd.DataFrame(data_share)
-                if 'holding_shares_level' in df_share.columns:
-                    df_big = df_share[df_share['holding_shares_level'].astype(str).str.contains('1000', na=False)]
+                # 修正 FinMind 千張大戶欄位讀取邏輯 (相容大小寫)
+                col_name = None
+                if 'HoldingSharesLevel' in df_share.columns:
+                    col_name = 'HoldingSharesLevel'
+                elif 'holding_shares_level' in df_share.columns:
+                    col_name = 'holding_shares_level'
+                    
+                if col_name:
+                    # '15' 在 FinMind API 代表 1000張以上大戶
+                    df_big = df_share[df_share[col_name].astype(str) == '15']
                     if len(df_big) >= 2:
-                        latest_ratio = float(df_big.iloc[-1].get('percent', 40))
-                        prev_ratio = float(df_big.iloc[-2].get('percent', 40))
+                        pct_col = 'percent' if 'percent' in df_big.columns else 'Percent'
+                        latest_ratio = float(df_big.iloc[-1].get(pct_col, 40))
+                        prev_ratio = float(df_big.iloc[-2].get(pct_col, 40))
                         if latest_ratio > prev_ratio or latest_ratio >= 50:
                             track_a_score = 10
-                            desc_a = f"✅ 集保大戶持股集中 (千張大戶持股比達 {latest_ratio}%，較前週增加)"
+                            desc_a = f"✅ 集保大戶持股集中 (千張大戶持股比達 {latest_ratio}%，較前週增加/安定)"
                         else:
                             track_a_score = 4
                             desc_a = f"⚠️ 集保大戶持股比微幅下滑至 {latest_ratio}%"
@@ -346,6 +356,7 @@ def get_stock_data(symbol):
             return ticker, hist
     return None, pd.DataFrame()
 
+# 六大分頁架構
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🚀 起漲掃描", "🔥 AI 題材", "🔍 個股診斷", "💼 個人持股", "🌐 國際與新聞雷達", "💎 甜甜價低基期潛伏"])
 
 # ==================== 分頁一：起漲掃描榜 ====================
@@ -432,7 +443,7 @@ with tab1:
             k1.metric("綜合量化總分", f"{info_data['總分']} 分", info_data['燈號'])
             k2.metric("目前現價", f"${info_data['現價']}")
             k3.metric("短線目標價", f"${info_data['目標價']}")
-            k4.metric("結構防守價", f"${info_data['結構防守價']}")
+            k4.metric("結構防守價", f"${info_data['防守價']}")
 
             st.info(f"🏢 **產業板塊歸屬**：{info_data['產業']}")
 
@@ -783,7 +794,7 @@ with tab4:
                             elif score < 60:
                                 advice = "⚠️ 量化評分偏低，留意回檔風險"
                             elif pnl_pct <= -10:
-                                advice = "⚠️ 虧損達 10%, 檢視是否觸及停損點"
+                                advice = "⚠️ 虧損達 10%，檢視是否觸及停損點"
 
                             results.append({
                                 "代號": sid,
@@ -940,7 +951,7 @@ with tab6:
                             om = info.get('operatingMargins', 0)
                             
                             if gm and gm >= 0.20 and om and om > 0:
-                                # 加入籌碼過濾器
+                                # 這裡已經加入了精準修正版的籌碼讀取邏輯
                                 s_chip, desc_chip = get_real_chip_data(sid)
                                 chip_status = "🔥 大戶/法人偷偷吸籌" if s_chip >= 15 else ("🟡 籌碼中性穩定" if s_chip >= 8 else "⚠️ 籌碼發散")
                                 
