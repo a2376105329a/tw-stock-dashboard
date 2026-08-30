@@ -130,13 +130,32 @@ def get_active_market_stocks():
     return pd.DataFrame([
         {"id": "3617", "name": "碩天", "volume": 1800, "close": 350},
         {"id": "2486", "name": "一詮", "volume": 3500, "close": 150},
-        {"id": "6642", "name": "富致", "volume": 900, "close": 75},
-        {"id": "2356", "name": "英業達", "volume": 15000, "close": 50},
-        {"id": "8234", "name": "新漢", "volume": 2500, "close": 70},
-        {"id": "6278", "name": "台表科", "volume": 3000, "close": 115},
-        {"id": "6271", "name": "同欣電", "volume": 2200, "close": 180},
-        {"id": "2369", "name": "菱生", "volume": 5000, "close": 40},
+        {"id": "6642", "name": "富致", "volume": 900, "close": 75}
     ])
+
+# 🚨【核心升級：動靜分離】靜態財報資料快取 24 小時，避開 API 封鎖
+@st.cache_data(ttl=86400)
+def get_fundamental_info(symbol):
+    for suffix in [".TW", ".TWO"]:
+        try:
+            ticker = yf.Ticker(f"{symbol}{suffix}")
+            info = ticker.info
+            if info and ('symbol' in info or 'shortName' in info):
+                return info
+        except:
+            pass
+    return {}
+
+# 🚨【核心升級：動靜分離】動態技術線型絕對不快取，確保盤中現價、KD 零延遲
+def get_stock_history(symbol):
+    for suffix in [".TW", ".TWO"]:
+        ticker = yf.Ticker(f"{symbol}{suffix}")
+        hist = ticker.history(period="6mo")
+        if not hist.empty:
+            if isinstance(hist.columns, pd.MultiIndex): 
+                hist.columns = hist.columns.get_level_values(0)
+            return hist
+    return pd.DataFrame()
 
 def calculate_indicators(df):
     close = df['Close'].astype(float)
@@ -229,7 +248,6 @@ def get_real_chip_data(symbol):
             data_share = res_share.json().get("data", [])
             if data_share:
                 df_share = pd.DataFrame(data_share)
-                # 修正 FinMind 千張大戶欄位讀取邏輯 (相容大小寫)
                 col_name = None
                 if 'HoldingSharesLevel' in df_share.columns:
                     col_name = 'HoldingSharesLevel'
@@ -237,7 +255,6 @@ def get_real_chip_data(symbol):
                     col_name = 'holding_shares_level'
                     
                 if col_name:
-                    # '15' 在 FinMind API 代表 1000張以上大戶
                     df_big = df_share[df_share[col_name].astype(str) == '15']
                     if len(df_big) >= 2:
                         pct_col = 'percent' if 'percent' in df_big.columns else 'Percent'
@@ -256,7 +273,7 @@ def get_real_chip_data(symbol):
     chip_desc_combined = f"【軌道A-集保大戶】{desc_a}\n【軌道B-三大法人】{desc_b}"
     return total_chip_score, chip_desc_combined
 
-def evaluate_single_stock(ticker_obj, hist, symbol):
+def evaluate_single_stock(info, hist, symbol):
     s_bias, s_vol_kd, s_gm, s_om, s_pat = 0, 0, 0, 0, 0
     desc_bias, desc_vol_kd, desc_gm, desc_om, desc_pat = "", "", "", "", ""
     
@@ -294,7 +311,7 @@ def evaluate_single_stock(ticker_obj, hist, symbol):
         s_vol_kd = 0
         desc_vol_kd = f"❌ KD 呈現空頭死叉"
 
-    info = ticker_obj.info
+    # 動靜分離：使用穩定快取傳進來的 info
     gm = info.get('grossMargins', 0)
     om = info.get('operatingMargins', 0)
     
@@ -347,14 +364,6 @@ def evaluate_single_stock(ticker_obj, hist, symbol):
     }
     return total_score, light, round(target, 2), round(stop, 2), score_details
 
-def get_stock_data(symbol):
-    for suffix in [".TW", ".TWO"]:
-        ticker = yf.Ticker(f"{symbol}{suffix}")
-        hist = ticker.history(period="6mo")
-        if not hist.empty:
-            if isinstance(hist.columns, pd.MultiIndex): hist.columns = hist.columns.get_level_values(0)
-            return ticker, hist
-    return None, pd.DataFrame()
 
 # 六大分頁架構
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🚀 起漲掃描", "🔥 AI 題材", "🔍 個股診斷", "💼 個人持股", "🌐 國際與新聞雷達", "💎 甜甜價低基期潛伏"])
@@ -393,10 +402,13 @@ with tab1:
             sind = industry_map.get(sid, "其他板塊")
             
             try:
-                ticker, hist = get_stock_data(sid)
+                # 獨立呼叫：info 被穩健快取，hist 即時抓取
+                info = get_fundamental_info(sid)
+                hist = get_stock_history(sid)
+                
                 if not hist.empty and len(hist) >= 60:
                     hist = calculate_indicators(hist)
-                    score, light, target, stop, details = evaluate_single_stock(ticker, hist, sid)
+                    score, light, target, stop, details = evaluate_single_stock(info, hist, sid)
                     curr_p = round(hist['Close'].iloc[-1], 2)
                     tag = "雙軌籌碼共振" if details["雙軌籌碼追蹤(集保大戶+三大法人)"][0] >= 15 else "動能觀察"
                 else:
@@ -525,10 +537,11 @@ with tab2:
         for tid in theme_tickers:
             t_name = name_map.get(tid, tid)
             try:
-                ticker, hist = get_stock_data(tid)
+                info = get_fundamental_info(tid)
+                hist = get_stock_history(tid)
                 if not hist.empty and len(hist) >= 60:
                     hist = calculate_indicators(hist)
-                    score, light, target, stop, details = evaluate_single_stock(ticker, hist, tid)
+                    score, light, target, stop, details = evaluate_single_stock(info, hist, tid)
                     curr_p = round(hist['Close'].iloc[-1], 2)
                     prev_p = round(hist['Close'].iloc[-2], 2)
                     pct_change = round(((curr_p - prev_p) / prev_p) * 100, 2)
@@ -594,20 +607,20 @@ with tab2:
 # ==================== 分頁三：個股深度診斷 ====================
 with tab3:
     st.subheader("🔍 個股深度診斷 ＆ AI 產業分析師 ＆ 估值模型")
-    target_stock = st.text_input("請輸入台股代號（例：3617, 2486, 2356, 2303, 6278）：", value="3617")
+    target_stock = st.text_input("請輸入台股代號（例：3617, 2486, 2356, 2327, 6278）：", value="2327")
 
     if target_stock:
-        ticker_obj, hist = get_stock_data(target_stock)
+        info = get_fundamental_info(target_stock)
+        hist = get_stock_history(target_stock)
         
         if not hist.empty and len(hist) >= 60:
             hist = calculate_indicators(hist)
-            info = ticker_obj.info
             
             s_name = name_map.get(target_stock, "")
             display_title = f"{target_stock} {s_name}" if s_name else target_stock
             s_ind = industry_map.get(target_stock, "其他板塊")
             
-            score, light, tech_target, tech_stop, details = evaluate_single_stock(ticker_obj, hist, target_stock)
+            score, light, tech_target, tech_stop, details = evaluate_single_stock(info, hist, target_stock)
             
             latest_price = round(hist['Close'].iloc[-1], 2)
             prev_price = round(hist['Close'].iloc[-2], 2)
@@ -772,10 +785,11 @@ with tab4:
                     sname = name_map.get(sid, sid)
                     
                     try:
-                        ticker_obj, hist = get_stock_data(sid)
+                        info = get_fundamental_info(sid)
+                        hist = get_stock_history(sid)
                         if not hist.empty and len(hist) >= 60:
                             hist = calculate_indicators(hist)
-                            score, light, target, stop, details = evaluate_single_stock(ticker_obj, hist, sid)
+                            score, light, target, stop, details = evaluate_single_stock(info, hist, sid)
                             curr_p = round(hist['Close'].iloc[-1], 2)
                             
                             market_val = curr_p * shares * 1000
@@ -936,7 +950,9 @@ with tab6:
                 sind = industry_map.get(sid, "其他板塊")
                 
                 try:
-                    ticker, hist = get_stock_data(sid)
+                    info = get_fundamental_info(sid)
+                    hist = get_stock_history(sid)
+                    
                     if not hist.empty and len(hist) >= 60:
                         hist = calculate_indicators(hist)
                         curr_p = round(hist['Close'].iloc[-1], 2)
@@ -946,12 +962,10 @@ with tab6:
                         bias_ma20 = round(((curr_p - ma20) / ma20) * 100, 2)
                         
                         if -5.0 <= bias_ma20 <= 4.0 and curr_p >= ma60 * 0.90:
-                            info = ticker.info
                             gm = info.get('grossMargins', 0)
                             om = info.get('operatingMargins', 0)
                             
                             if gm and gm >= 0.20 and om and om > 0:
-                                # 這裡已經加入了精準修正版的籌碼讀取邏輯
                                 s_chip, desc_chip = get_real_chip_data(sid)
                                 chip_status = "🔥 大戶/法人偷偷吸籌" if s_chip >= 15 else ("🟡 籌碼中性穩定" if s_chip >= 8 else "⚠️ 籌碼發散")
                                 
