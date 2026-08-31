@@ -133,7 +133,7 @@ def get_active_market_stocks():
         {"id": "6642", "name": "富致", "volume": 900, "close": 75}
     ])
 
-# 🚨【核心升級：動靜分離】靜態財報資料快取 24 小時，避開 API 封鎖
+# 🚨 動靜分離：靜態財報資料快取 24 小時，避開 API 封鎖
 @st.cache_data(ttl=86400)
 def get_fundamental_info(symbol):
     for suffix in [".TW", ".TWO"]:
@@ -146,7 +146,7 @@ def get_fundamental_info(symbol):
             pass
     return {}
 
-# 🚨【核心升級：動靜分離】動態技術線型絕對不快取，確保盤中現價、KD 零延遲
+# 🚨 動靜分離：動態技術線型絕對不快取，確保盤中現價零延遲
 def get_stock_history(symbol):
     for suffix in [".TW", ".TWO"]:
         ticker = yf.Ticker(f"{symbol}{suffix}")
@@ -311,29 +311,37 @@ def evaluate_single_stock(info, hist, symbol):
         s_vol_kd = 0
         desc_vol_kd = f"❌ KD 呈現空頭死叉"
 
-    # 動靜分離：使用穩定快取傳進來的 info
-    gm = info.get('grossMargins', 0)
-    om = info.get('operatingMargins', 0)
+    # 🚨 API 防呆更新：防止 None 造成誤判
+    gm = info.get('grossMargins')
+    om = info.get('operatingMargins')
     
-    if gm and gm >= 0.30:
+    # --- 毛利率判定 ---
+    if gm is None:
+        s_gm = 0
+        desc_gm = "⚪ Yahoo API 暫時無法取得毛利率資料"
+    elif gm >= 0.30:
         s_gm = 20
         desc_gm = f"✅ 超高毛利率達 {round(gm*100, 1)}% (享有產品定價權)"
-    elif gm and gm >= 0.15:
+    elif gm >= 0.15:
         s_gm = 12
         desc_gm = f"🟡 穩健毛利率達 {round(gm*100, 1)}%"
     else:
         s_gm = 0
-        desc_gm = f"❌ 毛利率偏低"
+        desc_gm = f"❌ 毛利率偏低 ({round(gm*100, 1)}%)"
 
-    if om and om > 0.10:
+    # --- 營益率判定 ---
+    if om is None:
+        s_om = 0
+        desc_om = "⚪ Yahoo API 暫時無法取得營益率資料"
+    elif om > 0.10:
         s_om = 20
         desc_om = f"✅ 營益率達 {round(om*100, 1)}% (本業獲利體質極佳)"
-    elif om and om > 0:
+    elif om > 0:
         s_om = 12
         desc_om = f"🟡 本業維持獲利 (營益率 {round(om*100, 1)}%)"
     else:
         s_om = 0
-        desc_om = f"❌ 本業呈現虧損"
+        desc_om = f"❌ 本業呈現虧損 ({round(om*100, 1)}%)"
 
     s_chip, desc_chip = get_real_chip_data(symbol)
 
@@ -363,7 +371,6 @@ def evaluate_single_stock(info, hist, symbol):
         "突破型態加分": (s_pat, 10, desc_pat)
     }
     return total_score, light, round(target, 2), round(stop, 2), score_details
-
 
 # 六大分頁架構
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🚀 起漲掃描", "🔥 AI 題材", "🔍 個股診斷", "💼 個人持股", "🌐 國際與新聞雷達", "💎 甜甜價低基期潛伏"])
@@ -402,7 +409,6 @@ with tab1:
             sind = industry_map.get(sid, "其他板塊")
             
             try:
-                # 獨立呼叫：info 被穩健快取，hist 即時抓取
                 info = get_fundamental_info(sid)
                 hist = get_stock_history(sid)
                 
@@ -607,7 +613,7 @@ with tab2:
 # ==================== 分頁三：個股深度診斷 ====================
 with tab3:
     st.subheader("🔍 個股深度診斷 ＆ AI 產業分析師 ＆ 估值模型")
-    target_stock = st.text_input("請輸入台股代號（例：3617, 2486, 2356, 2327, 6278）：", value="2327")
+    target_stock = st.text_input("請輸入台股代號（例：3617, 2486, 2356, 2303, 6278）：", value="2303")
 
     if target_stock:
         info = get_fundamental_info(target_stock)
@@ -962,10 +968,11 @@ with tab6:
                         bias_ma20 = round(((curr_p - ma20) / ma20) * 100, 2)
                         
                         if -5.0 <= bias_ma20 <= 4.0 and curr_p >= ma60 * 0.90:
-                            gm = info.get('grossMargins', 0)
-                            om = info.get('operatingMargins', 0)
+                            gm = info.get('grossMargins')
+                            om = info.get('operatingMargins')
                             
-                            if gm and gm >= 0.20 and om and om > 0:
+                            # 避免 None 錯誤的防呆寫法
+                            if gm is not None and gm >= 0.20 and om is not None and om > 0:
                                 s_chip, desc_chip = get_real_chip_data(sid)
                                 chip_status = "🔥 大戶/法人偷偷吸籌" if s_chip >= 15 else ("🟡 籌碼中性穩定" if s_chip >= 8 else "⚠️ 籌碼發散")
                                 
