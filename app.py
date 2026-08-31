@@ -9,13 +9,18 @@ import google.generativeai as genai
 
 st.set_page_config(page_title="台股低基期起漲量化戰情室", layout="wide")
 
-# --- 🔒 密碼防護解鎖機制 ---
+# --- 🔒 密碼防護解鎖機制 (已修復 KeyError 防呆) ---
 def check_password():
     def password_entered():
         correct_pwd = st.secrets.get("PASSWORD", "1234")
-        if st.session_state["password"] == correct_pwd:
+        # 使用 .get() 防呆，避免系統瞬間找不到變數導致 KeyError
+        current_pwd = st.session_state.get("password", "")
+        
+        if current_pwd == correct_pwd:
             st.session_state["password_correct"] = True
-            del st.session_state["password"]
+            # 安全刪除密碼紀錄，加入檢查機制
+            if "password" in st.session_state:
+                del st.session_state["password"]
         else:
             st.session_state["password_correct"] = False
 
