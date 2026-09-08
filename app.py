@@ -3,22 +3,19 @@ import pandas as pd
 import yfinance as yf
 import plotly.graph_objects as go
 import requests, io
-import json
+import json, os
 from datetime import datetime, timedelta
 import google.generativeai as genai
 
 st.set_page_config(page_title="台股低基期起漲量化戰情室", layout="wide")
 
-# --- 🔒 密碼防護解鎖機制 (已修復 KeyError 防呆) ---
+# --- 🔒 密碼防護解鎖機制 ---
 def check_password():
     def password_entered():
         correct_pwd = st.secrets.get("PASSWORD", "1234")
-        # 使用 .get() 防呆，避免系統瞬間找不到變數導致 KeyError
         current_pwd = st.session_state.get("password", "")
-        
         if current_pwd == correct_pwd:
             st.session_state["password_correct"] = True
-            # 安全刪除密碼紀錄，加入檢查機制
             if "password" in st.session_state:
                 del st.session_state["password"]
         else:
@@ -138,7 +135,6 @@ def get_active_market_stocks():
         {"id": "6642", "name": "富致", "volume": 900, "close": 75}
     ])
 
-# 🚨 動靜分離：靜態財報資料快取 24 小時，避開 API 封鎖
 @st.cache_data(ttl=86400)
 def get_fundamental_info(symbol):
     for suffix in [".TW", ".TWO"]:
@@ -151,7 +147,6 @@ def get_fundamental_info(symbol):
             pass
     return {}
 
-# 🚨 動靜分離：動態技術線型絕對不快取，確保盤中現價零延遲
 def get_stock_history(symbol):
     for suffix in [".TW", ".TWO"]:
         ticker = yf.Ticker(f"{symbol}{suffix}")
@@ -161,6 +156,42 @@ def get_stock_history(symbol):
                 hist.columns = hist.columns.get_level_values(0)
             return hist
     return pd.DataFrame()
+
+# 週末打檔法：微型本地資料庫記憶法人目標價
+def get_saved_target_price(symbol, info):
+    FILE_NAME = "target_prices.json"
+    
+    if os.path.exists(FILE_NAME):
+        with open(FILE_NAME, "r", encoding="utf-8") as f:
+            try:
+                saved_data = json.load(f)
+            except:
+                saved_data = {}
+    else:
+        saved_data = {}
+
+    t_mean = info.get('targetMeanPrice')
+    t_high = info.get('targetHighPrice')
+    t_low = info.get('targetLowPrice')
+
+    if t_mean is not None:
+        saved_data[symbol] = {
+            "mean": t_mean,
+            "high": t_high,
+            "low": t_low,
+            "update_time": datetime.now().strftime("%m/%d %H:%M")
+        }
+        try:
+            with open(FILE_NAME, "w", encoding="utf-8") as f:
+                json.dump(saved_data, f)
+        except Exception:
+            pass
+        return t_mean, t_high, t_low, "最新即時抓取"
+    else:
+        if symbol in saved_data:
+            return saved_data[symbol]["mean"], saved_data[symbol]["high"], saved_data[symbol]["low"], f"歷史記憶 ({saved_data[symbol]['update_time']})"
+        else:
+            return None, None, None, "尚無公開資料"
 
 def calculate_indicators(df):
     close = df['Close'].astype(float)
@@ -316,11 +347,9 @@ def evaluate_single_stock(info, hist, symbol):
         s_vol_kd = 0
         desc_vol_kd = f"❌ KD 呈現空頭死叉"
 
-    # 🚨 API 防呆更新：防止 None 造成誤判
     gm = info.get('grossMargins')
     om = info.get('operatingMargins')
     
-    # --- 毛利率判定 ---
     if gm is None:
         s_gm = 0
         desc_gm = "⚪ Yahoo API 暫時無法取得毛利率資料"
@@ -334,7 +363,6 @@ def evaluate_single_stock(info, hist, symbol):
         s_gm = 0
         desc_gm = f"❌ 毛利率偏低 ({round(gm*100, 1)}%)"
 
-    # --- 營益率判定 ---
     if om is None:
         s_om = 0
         desc_om = "⚪ Yahoo API 暫時無法取得營益率資料"
@@ -380,7 +408,7 @@ def evaluate_single_stock(info, hist, symbol):
 # 六大分頁架構
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🚀 起漲掃描", "🔥 AI 題材", "🔍 個股診斷", "💼 個人持股", "🌐 國際與新聞雷達", "💎 甜甜價低基期潛伏"])
 
-# ==================== 分頁一：起漲掃描榜 ====================
+# ==================== 分頁一：起漲掃描榜 (已加入成交量名次分頁功能) ====================
 with tab1:
     with st.expander("📖 點擊展開：【六大維度量化評分標準與雙軌籌碼邏輯】", expanded=False):
         st.markdown("""
@@ -394,16 +422,26 @@ with tab1:
         | **🔥 型態加分** | 洗盤結束突破 | 均線糾結 / 破底翻 / VCP 突破：**額外 +10分** | Bonus |
         """)
 
-    col_ctrl1, col_ctrl2 = st.columns([1, 2])
+    col_ctrl1, col_ctrl2, col_ctrl3 = st.columns([1, 1, 1])
     with col_ctrl1:
-        min_vol_input = st.slider("最低成交量門檻 (張)", min_value=500, max_value=5000, value=1000, step=100)
-        scan_limit = st.slider("掃描候選池數量上限", min_value=15, max_value=60, value=30, step=5)
+        page_num = st.number_input("切換成交量排行榜頁數", min_value=1, max_value=55, value=1, step=1, help="第1頁為大型熱門股，頁數越往後為中小型打底黑馬")
+    with col_ctrl2:
+        scan_limit = st.slider("單頁掃描數量上限", min_value=10, max_value=50, value=30, step=10)
+    with col_ctrl3:
+        st.write("")
+        st.write(f"🔍 目前掃描範圍：全市場第 **{(page_num-1)*scan_limit + 1}** ~ **{page_num*scan_limit}** 名")
     
-    if st.button("🔥 立即執行低基期起漲掃描"):
+    if st.button("🔥 立即執行分頁起漲掃描"):
         market_stocks = get_active_market_stocks()
-        candidates = market_stocks[market_stocks['volume'] >= min_vol_input].sort_values(by="volume", ascending=False).head(scan_limit)
+        # 依照全市場成交量由大到小排序
+        sorted_stocks = market_stocks.sort_values(by="volume", ascending=False)
         
-        st.write(f"已從市場鎖定 **{len(candidates)} 檔** 動能標的進行全方位評分解剖...")
+        # 依照頁數切換區間
+        start_idx = (page_num - 1) * scan_limit
+        end_idx = page_num * scan_limit
+        candidates = sorted_stocks.iloc[start_idx:end_idx]
+        
+        st.write(f"已從市場鎖定第 {start_idx+1} ~ {end_idx} 名的 **{len(candidates)} 檔** 動能標的進行全方位評分解剖...")
         progress_bar = st.progress(0)
         ranking_list = []
         detail_dict = {}
@@ -453,7 +491,7 @@ with tab1:
         st.session_state['scan_details'] = detail_dict
 
     if 'scan_df' in st.session_state:
-        st.success(f"✅ 掃描完成！共評估 {len(st.session_state['scan_df'])} 檔活躍股：")
+        st.success(f"✅ 掃描完成！共評估 {len(st.session_state['scan_df'])} 檔標的：")
         st.dataframe(st.session_state['scan_df'], use_container_width=True)
 
         st.markdown("---")
@@ -637,14 +675,11 @@ with tab3:
             prev_price = round(hist['Close'].iloc[-2], 2)
             price_change = round(((latest_price - prev_price) / prev_price) * 100, 2)
             
-            gm = round(info.get('grossMargins', 0) * 100, 2) if info.get('grossMargins') else "N/A"
-            om = round(info.get('operatingMargins', 0) * 100, 2) if info.get('operatingMargins') else "N/A"
             eps = round(info.get('trailingEps', 0), 2) if info.get('trailingEps') else None
             curr_pe = round(info.get('trailingPE', 0), 1) if info.get('trailingPE') else None
             
-            analyst_target = info.get('targetMeanPrice')
-            analyst_high = info.get('targetHighPrice')
-            analyst_low = info.get('targetLowPrice')
+            # 週末打檔法：讀取本地 JSON 目標價緩存
+            analyst_target, analyst_high, analyst_low, target_status = get_saved_target_price(target_stock, info)
             
             pe_bench = INDUSTRY_PE_BENCHMARK.get(s_ind, INDUSTRY_PE_BENCHMARK["其他板塊"])
             val_low, val_mid, val_high = None, None, None
@@ -703,7 +738,7 @@ with tab3:
                 if analyst_target:
                     upside_analyst = round(((analyst_target - latest_price) / latest_price) * 100, 1)
                     st.metric("法人共識平均目標價", f"${round(analyst_target, 1)}", f"潛在空間: {upside_analyst}%")
-                    st.caption(f"法人預估區間：**${round(analyst_low, 1)} ~ ${round(analyst_high, 1)}**" if analyst_high else "")
+                    st.caption(f"💡 {target_status} ｜ 區間：**${round(analyst_low, 1)} ~ ${round(analyst_high, 1)}**" if analyst_high else f"💡 狀態: {target_status}")
                 else:
                     st.info("法人目前尚無公開共識目標價。")
 
@@ -976,7 +1011,6 @@ with tab6:
                             gm = info.get('grossMargins')
                             om = info.get('operatingMargins')
                             
-                            # 避免 None 錯誤的防呆寫法
                             if gm is not None and gm >= 0.20 and om is not None and om > 0:
                                 s_chip, desc_chip = get_real_chip_data(sid)
                                 chip_status = "🔥 大戶/法人偷偷吸籌" if s_chip >= 15 else ("🟡 籌碼中性穩定" if s_chip >= 8 else "⚠️ 籌碼發散")
