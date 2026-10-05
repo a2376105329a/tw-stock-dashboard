@@ -140,31 +140,63 @@ def calculate_indicators(df):
     return df
 
 # 型態辨識 (W底、碗型底、均線糾結)
+# 型態辨識 (升級版：含 VCP、頭肩底、量先價行、W底、碗型底、均線糾結)
 def detect_bottom_patterns(df):
     if len(df) < 60: return ""
     close = df['Close']
+    open_p = df['Open']
+    high = df['High']
+    low = df['Low']
+    vol = df['Volume']
     curr_price = close.iloc[-1]
-    lows = df['Low']
     
-    pattern = ""
-    # 1. 均線糾結突破
+    # 1. 均線糾結突破 (優先度最高：起漲爆發力最強)
     ma_prev = [df['MA5'].iloc[-2], df['MA10'].iloc[-2], df['MA20'].iloc[-2], df['MA60'].iloc[-2]]
     if (max(ma_prev) - min(ma_prev)) / min(ma_prev) <= 0.04 and curr_price > max(ma_prev):
-        pattern = "【均線極致糾結＋帶量突破】"
-        return pattern
+        return "【均線極致糾結 ＋ 帶量突破】"
         
-    # 2. W底 (雙重底)
-    recent_low = lows.iloc[-20:-5].min()
-    older_low = lows.iloc[-60:-20].min()
-    if abs(recent_low - older_low) / older_low < 0.05 and curr_price > df['High'].iloc[-15:-1].max():
-        pattern = "【W底 (雙腳打底) 突破頸線】"
-        return pattern
+    # 2. VCP 價格波動收縮 (Mark Minervini 絕技)
+    # 邏輯：近一個月的波動度，比前一個月縮小至少 40%，且今天帶量突破近一個月高點
+    range_old = high.iloc[-40:-20].max() - low.iloc[-40:-20].min()
+    range_recent = high.iloc[-20:-2].max() - low.iloc[-20:-2].min()
+    vol_recent_mean = vol.iloc[-20:-2].mean()
+    if range_recent < range_old * 0.6 and curr_price > high.iloc[-20:-2].max() and vol.iloc[-1] > vol_recent_mean * 1.5:
+        return "【VCP 波動收縮 (洗盤極限，彈簧發動)】"
         
-    # 3. 碗型底 (U型底)
-    if lows.iloc[-40:-10].mean() < lows.iloc[-60:-40].mean() and curr_price > df['MA60'].iloc[-1]:
-        pattern = "【碗型大底 (長線洗盤結束)】"
+    # 3. 頭肩大底 (Inverse Head & Shoulders)
+    # 邏輯：分為左肩(前)、頭部(中)、右肩(近)。頭部最低，且左右肩高度相近。
+    left_shoulder = low.iloc[-60:-40].min()
+    head = low.iloc[-40:-20].min()
+    right_shoulder = low.iloc[-20:-5].min()
+    if head < left_shoulder and head < right_shoulder and abs(left_shoulder - right_shoulder) / right_shoulder < 0.1:
+        neckline = high.iloc[-40:-5].max()
+        if curr_price >= neckline * 0.98: # 股價來到頸線附近或已突破
+            return "【頭肩大底 (長線終極反轉)】"
+
+    # 4. W底 (雙重底)
+    recent_low = low.iloc[-20:-5].min()
+    older_low = low.iloc[-60:-20].min()
+    if abs(recent_low - older_low) / older_low < 0.05 and curr_price > high.iloc[-20:-1].max():
+        return "【W底 (雙腳打底) 突破頸線】"
         
-    return pattern
+    # 5. 量先價行 (底部偷偷吸籌)
+    # 邏輯：股價還趴在季線附近沒動 (乖離 < 5%)，但近 20 天內，出現至少 3 次「出量且收紅K」
+    if 'MA60' in df.columns:
+        bias_60 = abs(curr_price - df['MA60'].iloc[-1]) / df['MA60'].iloc[-1]
+        if bias_60 < 0.05:
+            red_volume_spikes = 0
+            for i in range(-21, -1):
+                # 收盤大於開盤(紅K) 且 成交量大於月均量 1.5 倍
+                if close.iloc[i] > open_p.iloc[i] and vol.iloc[i] > df['MA20'].iloc[i] * 1.5:
+                    red_volume_spikes += 1
+            if red_volume_spikes >= 3:
+                return "【量先價行 (底部連續紅K吃貨)】"
+                
+    # 6. 碗型底 (U型大底)
+    if low.iloc[-40:-10].mean() < low.iloc[-60:-40].mean() and curr_price > df['MA60'].iloc[-1]:
+        return "【碗型大底 (長線洗盤結束)】"
+        
+    return ""
 
 @st.cache_data(ttl=3600)
 def get_real_chip_data(symbol, current_price):
