@@ -124,7 +124,7 @@ def get_stock_history(symbol):
             return hist
     return pd.DataFrame()
 
-# 計算季線、布林通道等指標
+# 【技術指標運算核心 (含 KD、RSI、布林通道)】
 def calculate_indicators(df):
     close = df['Close'].astype(float)
     df['MA5'] = close.rolling(5).mean()
@@ -132,15 +132,31 @@ def calculate_indicators(df):
     df['MA20'] = close.rolling(20).mean()
     df['MA60'] = close.rolling(60).mean()
     
-    # 布林通道 (Bollinger Bands)
+    # 布林通道
     df['STD20'] = close.rolling(20).std()
     df['BB_UP'] = df['MA20'] + 2 * df['STD20']
     df['BB_LOW'] = df['MA20'] - 2 * df['STD20']
     df['BB_WIDTH'] = (df['BB_UP'] - df['BB_LOW']) / df['MA20']
+    
+    # KD 指標 (9天)
+    l9 = df['Low'].rolling(window=9).min()
+    h9 = df['High'].rolling(window=9).max()
+    rsv = ((close - l9) / (h9 - l9) * 100).fillna(50)
+    df['K'] = rsv.ewm(alpha=1/3, adjust=False).mean()
+    df['D'] = df['K'].ewm(alpha=1/3, adjust=False).mean()
+    
+    # RSI 指標 (14天)
+    delta = close.diff()
+    up = delta.clip(lower=0)
+    down = -1 * delta.clip(upper=0)
+    ema_up = up.ewm(com=13, adjust=False).mean()
+    ema_down = down.ewm(com=13, adjust=False).mean()
+    rs = ema_up / ema_down
+    df['RSI'] = 100 - (100 / (1 + rs))
+    
     return df
 
-# 型態辨識 (W底、碗型底、均線糾結)
-# 型態辨識 (升級版：含 VCP、頭肩底、量先價行、W底、碗型底、均線糾結)
+# 【型態辨識引擎】
 def detect_bottom_patterns(df):
     if len(df) < 60: return ""
     close = df['Close']
@@ -150,27 +166,25 @@ def detect_bottom_patterns(df):
     vol = df['Volume']
     curr_price = close.iloc[-1]
     
-    # 1. 均線糾結突破 (優先度最高：起漲爆發力最強)
+    # 1. 均線糾結突破
     ma_prev = [df['MA5'].iloc[-2], df['MA10'].iloc[-2], df['MA20'].iloc[-2], df['MA60'].iloc[-2]]
     if (max(ma_prev) - min(ma_prev)) / min(ma_prev) <= 0.04 and curr_price > max(ma_prev):
         return "【均線極致糾結 ＋ 帶量突破】"
         
-    # 2. VCP 價格波動收縮 (Mark Minervini 絕技)
-    # 邏輯：近一個月的波動度，比前一個月縮小至少 40%，且今天帶量突破近一個月高點
+    # 2. VCP 價格波動收縮
     range_old = high.iloc[-40:-20].max() - low.iloc[-40:-20].min()
     range_recent = high.iloc[-20:-2].max() - low.iloc[-20:-2].min()
     vol_recent_mean = vol.iloc[-20:-2].mean()
     if range_recent < range_old * 0.6 and curr_price > high.iloc[-20:-2].max() and vol.iloc[-1] > vol_recent_mean * 1.5:
-        return "【VCP 波動收縮 (洗盤極限，彈簧發動)】"
+        return "【VCP 波動收縮 (彈簧發動)】"
         
-    # 3. 頭肩大底 (Inverse Head & Shoulders)
-    # 邏輯：分為左肩(前)、頭部(中)、右肩(近)。頭部最低，且左右肩高度相近。
+    # 3. 頭肩大底
     left_shoulder = low.iloc[-60:-40].min()
     head = low.iloc[-40:-20].min()
     right_shoulder = low.iloc[-20:-5].min()
     if head < left_shoulder and head < right_shoulder and abs(left_shoulder - right_shoulder) / right_shoulder < 0.1:
         neckline = high.iloc[-40:-5].max()
-        if curr_price >= neckline * 0.98: # 股價來到頸線附近或已突破
+        if curr_price >= neckline * 0.98: 
             return "【頭肩大底 (長線終極反轉)】"
 
     # 4. W底 (雙重底)
@@ -180,19 +194,14 @@ def detect_bottom_patterns(df):
         return "【W底 (雙腳打底) 突破頸線】"
         
     # 5. 量先價行 (底部偷偷吸籌)
-    # 邏輯：股價還趴在季線附近沒動 (乖離 < 5%)，但近 20 天內，出現至少 3 次「出量且收紅K」
     if 'MA60' in df.columns:
         bias_60 = abs(curr_price - df['MA60'].iloc[-1]) / df['MA60'].iloc[-1]
         if bias_60 < 0.05:
-            red_volume_spikes = 0
-            for i in range(-21, -1):
-                # 收盤大於開盤(紅K) 且 成交量大於月均量 1.5 倍
-                if close.iloc[i] > open_p.iloc[i] and vol.iloc[i] > df['MA20'].iloc[i] * 1.5:
-                    red_volume_spikes += 1
+            red_volume_spikes = sum([1 for i in range(-21, -1) if close.iloc[i] > open_p.iloc[i] and vol.iloc[i] > df['MA20'].iloc[i] * 1.5])
             if red_volume_spikes >= 3:
                 return "【量先價行 (底部連續紅K吃貨)】"
                 
-    # 6. 碗型底 (U型大底)
+    # 6. 碗型底
     if low.iloc[-40:-10].mean() < low.iloc[-60:-40].mean() and curr_price > df['MA60'].iloc[-1]:
         return "【碗型大底 (長線洗盤結束)】"
         
@@ -214,31 +223,24 @@ def get_real_chip_data(symbol, current_price):
         if res_inst.status_code == 200:
             df_inst = pd.DataFrame(res_inst.json().get("data", []))
             if not df_inst.empty:
-                # 投信防守
                 df_trust = df_inst[df_inst['name'].str.contains("投信")].tail(10)
                 if not df_trust.empty:
                     df_trust['net'] = pd.to_numeric(df_trust['buy'], errors='coerce') - pd.to_numeric(df_trust['sell'], errors='coerce')
                     total_net = df_trust['net'].sum()
                     if total_net > 100:
-                        s_trust = 8
-                        desc_trust = f"✅ 投信近10日呈現買超 (淨買超 {int(total_net)} 張)，股價處於防守傘下"
+                        s_trust, desc_trust = 8, f"✅ 投信近10日呈現買超 (淨買超 {int(total_net)} 張)"
                     elif total_net < -100:
-                        s_trust = 0
-                        desc_trust = f"🚨 投信近10日倒貨 (淨賣超 {int(abs(total_net))} 張)，防範結帳賣壓"
+                        s_trust, desc_trust = 0, f"🚨 投信近10日倒貨 (淨賣超 {int(abs(total_net))} 張)"
 
-                # 外資連買
                 df_foreign = df_inst[df_inst['name'].str.contains("外資")].tail(5)
                 if not df_foreign.empty:
                     df_foreign['net'] = pd.to_numeric(df_foreign['buy'], errors='coerce') - pd.to_numeric(df_foreign['sell'], errors='coerce')
                     buy_days = len(df_foreign[df_foreign['net'] > 0])
                     if buy_days >= 3:
-                        s_foreign = 4
-                        desc_foreign = f"✅ 外資近 5 日出現 {buy_days} 日買超 (真外資進駐跡象)"
+                        s_foreign, desc_foreign = 4, f"✅ 外資近 5 日出現 {buy_days} 日買超"
                     elif buy_days == 0:
-                        s_foreign = 0
-                        desc_foreign = "🚨 外資近 5 日連續倒貨"
+                        s_foreign, desc_foreign = 0, "🚨 外資近 5 日連續倒貨"
 
-        # 大戶籌碼
         url_share = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockShareholding&data_id={symbol}&start_date={start_date}&end_date={end_date}"
         res_share = requests.get(url_share, timeout=5)
         if res_share.status_code == 200:
@@ -251,53 +253,68 @@ def get_real_chip_data(symbol, current_price):
                     latest_ratio = float(df_big.iloc[-1].get(pct_col, 40))
                     prev_ratio = float(df_big.iloc[-2].get(pct_col, 40))
                     if latest_ratio > prev_ratio:
-                        s_big = 8
-                        desc_big = f"✅ 千張大戶最新持股升至 {latest_ratio}% (大戶偷偷吸籌)"
+                        s_big, desc_big = 8, f"✅ 千張大戶最新持股升至 {latest_ratio}% (偷偷吸籌)"
                     elif latest_ratio < prev_ratio:
-                        s_big = 0
-                        desc_big = f"🚨 千張大戶最新持股降至 {latest_ratio}% (大戶退場)"
+                        s_big, desc_big = 0, f"🚨 千張大戶最新持股降至 {latest_ratio}% (大戶退場)"
     except:
         pass
 
     return s_trust + s_big + s_foreign, {"投信防守": (s_trust, 8, desc_trust), "大戶增減": (s_big, 8, desc_big), "外資佈局": (s_foreign, 4, desc_foreign)}
 
 def evaluate_single_stock(info, hist, symbol, s_ind):
-    # 【第三柱：技術面 (滿分 40分) - 季線/布林/型態】
+    # 【第三柱：技術面 (四等分矩陣，滿分 40分)】
     curr_p = round(hist['Close'].iloc[-1], 2)
     ma60 = round(hist['MA60'].iloc[-1], 2)
     vol_today = hist['Volume'].iloc[-1]
     vol_ma20 = hist['Volume'].rolling(20).mean().iloc[-1]
     
-    # 1. 季線防守 (15分)
+    # 1. 季線防守 (10分)
     bias60 = round(((curr_p - ma60) / ma60) * 100, 2)
     if 0 <= bias60 <= 10.0:
-        s_ma60, desc_ma60 = 15, f"✅ 站上季線且乖離僅 {bias60}% (極低風險黃金起漲區)"
+        s_ma60, desc_ma60 = 10, f"✅ 站上季線且乖離僅 {bias60}% (極低風險區)"
     elif bias60 > 10.0:
-        s_ma60, desc_ma60 = 5, f"🟡 站上季線但乖離達 {bias60}% (偏離成本，追高風險升)"
+        s_ma60, desc_ma60 = 5, f"🟡 站上季線但乖離達 {bias60}% (追高風險升)"
     else:
-        s_ma60, desc_ma60 = 0, f"❌ 跌破季線生命線 (乖離 {bias60}%)"
+        s_ma60, desc_ma60 = 0, f"❌ 跌破季線 (乖離 {bias60}%)"
 
-    # 2. 布林通道壓縮與突破 (15分)
+    # 2. 布林通道 (10分)
     bb_up = hist['BB_UP'].iloc[-1]
     bb_width = hist['BB_WIDTH'].iloc[-1]
     if bb_width < 0.12 and curr_p >= bb_up * 0.99 and vol_today > vol_ma20 * 1.3:
-        s_bb, desc_bb = 15, f"🔥 布林極度壓縮後，今日【帶量突破上軌】(發動訊號)"
+        s_bb, desc_bb = 10, f"🔥 布林極度壓縮後，今日帶量突破上軌"
     elif curr_p > hist['MA20'].iloc[-1]:
-        s_bb, desc_bb = 8, f"🟡 股價於布林中軌之上溫和震盪"
+        s_bb, desc_bb = 5, f"🟡 股價於布林中軌之上溫和震盪"
     else:
         s_bb, desc_bb = 0, f"❌ 跌破布林中軌，趨勢轉弱"
 
-    # 3. 底部起漲型態 (10分)
+    # 3. KD 與 RSI 雙重動能 (10分)
+    k_val = round(hist['K'].iloc[-1], 1)
+    d_val = round(hist['D'].iloc[-1], 1)
+    rsi_val = round(hist['RSI'].iloc[-1], 1)
+    
+    if k_val > d_val and rsi_val >= 50:
+        s_kdrsi, desc_kdrsi = 10, f"✅ KD金叉 (K:{k_val}) 且 RSI 站上多方 ({rsi_val})"
+    elif k_val > d_val or rsi_val >= 50:
+        s_kdrsi, desc_kdrsi = 5, f"🟡 KD與RSI未完全共振，動能加溫中"
+    else:
+        s_kdrsi, desc_kdrsi = 0, f"❌ KD死叉且 RSI 弱勢 ({rsi_val})"
+
+    # 4. 底部起漲型態 (10分)
     pattern = detect_bottom_patterns(hist)
     if pattern:
-        s_pat, desc_pat = 10, f"🔥 命中底部型態：{pattern} (+10分)"
+        s_pat, desc_pat = 10, f"🔥 命中底部型態：{pattern}"
     else:
         s_pat, desc_pat = 0, "⚪ 無特殊底部反轉型態"
 
-    tech_total = s_ma60 + s_bb + s_pat
-    tech_details = {"季線防守": (s_ma60, 15, desc_ma60), "布林軌道": (s_bb, 15, desc_bb), "底部型態": (s_pat, 10, desc_pat)}
+    tech_total = s_ma60 + s_bb + s_kdrsi + s_pat
+    tech_details = {
+        "季線防守": (s_ma60, 10, desc_ma60), 
+        "布林軌道": (s_bb, 10, desc_bb), 
+        "KD與RSI": (s_kdrsi, 10, desc_kdrsi), 
+        "底部型態": (s_pat, 10, desc_pat)
+    }
 
-    # 【第一柱：基本面 (滿分 40分) - 動態四均分】
+    # 【第一柱：基本面 (動態四均分，滿分 40分)】
     valid_max = 0
     s_gm, s_om, s_yoy, s_pe = 0, 0, 0, 0
     
@@ -350,11 +367,14 @@ def evaluate_single_stock(info, hist, symbol, s_ind):
         "Tech": (tech_total, tech_details)
     }
     
-    # 計算 AI 停損利需要的關鍵價位
+    # 算好給 AI 停損利計畫的關鍵點位與指標
     key_prices = {
         "pressure": round(hist['High'].iloc[-60:].max(), 2),
         "support": round(hist['Low'].iloc[-30:].min(), 2),
-        "ma60": ma60
+        "ma60": ma60,
+        "k_val": k_val,
+        "d_val": d_val,
+        "rsi_val": rsi_val
     }
     
     return total_score, light, pillars, key_prices, curr_p
@@ -393,10 +413,10 @@ with tab3:
                 for k, (s, m, desc) in f_details.items(): st.write(f"- {desc}")
                 
                 if "GEMINI_API_KEY" in st.secrets:
-                    if st.button("🤖 預估未來 EPS", key="ai_eps"):
+                    if st.button("🤖 預估 2027 年 EPS", key="ai_eps"):
                         with st.spinner("解析法說會展望..."):
                             genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-                            prompt = f"以資深分析師角度，預估台股 {display_title} ({s_ind}) 未來一年 EPS 展望，字數100字內。"
+                            prompt = f"現在時間是2026年10月，請以資深分析師角度，預估台股 {display_title} ({s_ind}) 2027年全年的 EPS 展望與營運動能，字數100字內。"
                             st.success(genai.GenerativeModel("gemini-3.6-flash").generate_content(prompt).text)
 
             # --- ⛽ 第二柱：籌碼面 ---
@@ -417,7 +437,7 @@ with tab3:
                     if st.button("🤖 制定停損利計畫", key="ai_tech"):
                         with st.spinner("計算風報比中..."):
                             genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-                            prompt = f"目標股票【{display_title}】，現價 {curr_p}。季線 {key_prices['ma60']}，近期高點壓力 {key_prices['pressure']}，近期低點支撐 {key_prices['support']}。請提供明確的進場區間、停損價、停利價。100字內，語氣果斷。"
+                            prompt = f"目標股票【{display_title}】，現價 {curr_p}。季線 {key_prices['ma60']}，近期高點壓力 {key_prices['pressure']}，近期低點支撐 {key_prices['support']}，目前KD值(K:{key_prices['k_val']}, D:{key_prices['d_val']})，RSI為{key_prices['rsi_val']}。請根據以上技術數據，提供明確的進場區間、停損價、停利價。100字內，語氣果斷。"
                             st.warning(genai.GenerativeModel("gemini-3.6-flash").generate_content(prompt).text)
 
             st.markdown("---")
@@ -430,14 +450,14 @@ with tab3:
                         genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
                         
                         master_prompt = f"""
-                        你是一位頂尖的台股操盤手兼產業分析師。請針對【{display_title}】產出一份「終極戰情報告」。
+                        現在時間是2026年10月。你是一位頂尖的台股操盤手兼產業分析師。請針對【{display_title}】產出一份「終極戰情報告」。
                         
                         【系統偵測數據】
                         - 綜合總分：{score} / 100 ({light})
                         - 產業板塊：{s_ind}
                         - 基本得分：{f_score}/40 (重點：{f_details['毛利率'][2]} / {f_details['EPS YoY'][2]})
                         - 籌碼得分：{c_score}/20 (重點：{c_details['投信防守'][2]} / {c_details['大戶增減'][2]})
-                        - 技術得分：{t_score}/40 (重點：{t_details['季線防守'][2]} / {t_details['底部型態'][2]})
+                        - 技術得分：{t_score}/40 (重點：{t_details['季線防守'][2]} / {t_details['KD與RSI'][2]} / {t_details['底部型態'][2]})
                         
                         請提供以下三個段落的精要分析（使用 Markdown 排版，語氣專業果斷）：
                         1. 👑 **【公司業務與核心題材】**：這家公司主要做什麼？有什麼潛在利多題材或供應鏈地位？
