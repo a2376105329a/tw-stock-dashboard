@@ -127,13 +127,16 @@ def get_fundamental_info(symbol):
     return {}
 
 def get_stock_history(symbol):
+    # 強制設定 timeout=3，防止 Yahoo 伺服器不回應導致無窮轉圈圈
     for suffix in [".TW", ".TWO"]:
-        ticker = yf.Ticker(f"{symbol}{suffix}")
-        hist = ticker.history(period="6mo")
-        if not hist.empty:
-            if isinstance(hist.columns, pd.MultiIndex): 
-                hist.columns = hist.columns.get_level_values(0)
-            return hist
+        try:
+            hist = yf.download(f"{symbol}{suffix}", period="6mo", progress=False, timeout=3)
+            if not hist.empty:
+                if isinstance(hist.columns, pd.MultiIndex): 
+                    hist.columns = hist.columns.get_level_values(0)
+                return hist
+        except:
+            pass
     return pd.DataFrame()
 
 # --- 📈 技術指標與型態引擎 ---
@@ -424,10 +427,27 @@ with tab1:
                         return {"代號": sid, "名稱": sname, "產業": sind, "現價": curr_price, "觸發型態": pattern_type, "建議停損": round(struct_stop, 2), "目標停利": round(target_price, 2), "放量倍數": f"{round(vol_today / vol_ma20, 2)}x", "評分": score}
                 return None
 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-                for f in concurrent.futures.as_completed([executor.submit(quick_scan, row) for _, row in candidates.iterrows()]):
+            # 建立視覺化進度條
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+
+            # 降低並發數量 (max_workers 改為 4)，避免觸發 Yahoo 防護機制
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+                futures = {executor.submit(quick_scan, row): row for _, row in candidates.iterrows()}
+                completed = 0
+                for f in concurrent.futures.as_completed(futures):
+                    completed += 1
+                    # 即時更新進度條與文字
+                    status_text.text(f"🔍 正在深度掃描市場主力股... (進度: {completed} / {scan_scope})")
+                    progress_bar.progress(completed / scan_scope)
+                    
                     res = f.result()
-                    if res: buy_signals.append(res)
+                    if res: 
+                        buy_signals.append(res)
+            
+            # 掃描完成後清空進度條文字
+            status_text.empty()
+            progress_bar.empty()
             
             if buy_signals:
                 df_result = pd.DataFrame(buy_signals).sort_values(by="評分", ascending=False)
