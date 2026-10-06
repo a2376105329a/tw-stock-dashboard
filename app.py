@@ -37,22 +37,7 @@ if not check_password():
 
 st.title("🎯 台股量化作戰室：三柱共振 ＆ AI 決策系統")
 
-# --- ⚙️️ 系統設定與常數 ---
-INDUSTRY_MAP = {
-    "半導體業": "半導體 / 先進製程 / 封測",
-    "電腦及週邊設備業": "電腦硬體 / AI伺服器代工",
-    "電子零組件業": "電子零組件 / PCB / 散熱 / 被動元件",
-    "通信網路業": "網通設備 / CPO光通訊",
-    "電機機械": "重電設備 / 綠能電網 / 電線電纜",
-    "電機機械業": "重電設備 / 綠能電網 / 電線電纜",
-    "電子通路業": "電子零組件通路商",
-    "資訊服務業": "資訊軟體 / 系統整合",
-    "化學工業": "化學工業 / 特用化學",
-    "鋼鐵工業": "鋼鐵鋼筋",
-    "生技醫療業": "生技醫療",
-    "航運業": "航運航港 / 貨櫃 / 航空"
-}
-
+# --- ⚙ 系統設定與常數 ---
 INDUSTRY_PE_BENCHMARK = {
     "半導體 / 先進製程 / 封測": {"low": 15, "mid": 20, "high": 25},
     "電腦硬體 / AI伺服器代工": {"low": 12, "mid": 16, "high": 22},
@@ -66,26 +51,32 @@ INDUSTRY_PE_BENCHMARK = {
     "其他板塊": {"low": 12, "mid": 15, "high": 20}
 }
 
-# --- 📂 資料獲取模組 ---
+# --- 📂 資料獲取模組 (光速防卡死版) ---
 @st.cache_data(ttl=86400)
 def get_tw_stock_meta():
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     name_map, industry_map = {}, {}
-    urls = ["https://isin.twse.com.tw/isin/C_public.jsp?strMode=2", "https://isin.twse.com.tw/isin/C_public.jsp?strMode=4"]
-    for url in urls:
-        try:
-            resp = requests.get(url, headers=headers, timeout=15)
-            df = pd.read_html(io.StringIO(resp.text))[0]
-            df.columns = df.iloc[0]; df = df.iloc[1:]
-            for _, row in df.iterrows():
-                raw = str(row['有價證券代號及名稱']).split()
-                if len(raw) >= 2 and len(raw[0]) == 4:
-                    ticker = f"{raw[0]}{'.TW' if 'strMode=2' in url else '.TWO'}"
-                    name_map[raw[0]] = raw[1]; name_map[ticker] = raw[1]
-                    raw_ind = str(row.get('產業別', '其他')).strip()
-                    ind = INDUSTRY_MAP.get(raw_ind, raw_ind)
-                    industry_map[raw[0]] = ind; industry_map[ticker] = ind
-        except: pass
+    try:
+        # 抓取上市股票名單 (光速 API)
+        res_twse = requests.get("https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL", timeout=5)
+        if res_twse.status_code == 200:
+            for item in res_twse.json():
+                code = item.get("Code", "")
+                name = item.get("Name", "")
+                if len(code) == 4:
+                    name_map[code] = name
+                    name_map[f"{code}.TW"] = name
+                    
+        # 抓取上櫃股票名單 (光速 API)
+        res_tpex = requests.get("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes", timeout=5)
+        if res_tpex.status_code == 200:
+            for item in res_tpex.json():
+                code = item.get("SecuritiesCompanyCode", "")
+                name = item.get("CompanyName", "")
+                if len(code) == 4:
+                    name_map[code] = name
+                    name_map[f"{code}.TWO"] = name
+    except:
+        pass
     return name_map, industry_map
 
 name_map, industry_map = get_tw_stock_meta()
@@ -114,6 +105,7 @@ def get_fundamental_info(symbol):
     return {}
 
 def get_stock_history(symbol):
+    # 這裡的 timeout=3 是防止 Yahoo 伺服器已讀不回的終極防護網
     for suffix in [".TW", ".TWO"]:
         try:
             hist = yf.download(f"{symbol}{suffix}", period="6mo", progress=False, timeout=3)
