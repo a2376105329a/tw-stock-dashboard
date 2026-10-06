@@ -156,7 +156,7 @@ def calculate_indicators(df):
     
     return df
 
-# 【型態辨識引擎】
+# 【型態辨識引擎 (升級版)】
 def detect_bottom_patterns(df):
     if len(df) < 60: return ""
     close = df['Close']
@@ -383,7 +383,7 @@ def evaluate_single_stock(info, hist, symbol, s_ind):
 tab1, tab3 = st.tabs(["🚀 起漲掃描", "🔍 個股診斷 ＆ 戰情室大腦"])
 
 with tab1:
-    st.info("起漲掃描功能正常運作中（同先前版本，隱藏以節省版面）...")
+    st.info("起漲掃描模組準備就緒。在未來的擴充中可以在此加入批次掃描邏輯！")
 
 # ==================== 分頁三：個股深度診斷 ====================
 with tab3:
@@ -415,9 +415,16 @@ with tab3:
                 if "GEMINI_API_KEY" in st.secrets:
                     if st.button("🤖 預估 2027 年 EPS", key="ai_eps"):
                         with st.spinner("解析法說會展望..."):
-                            genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-                            prompt = f"現在時間是2026年10月，請以資深分析師角度，預估台股 {display_title} ({s_ind}) 2027年全年的 EPS 展望與營運動能，字數100字內。"
-                            st.success(genai.GenerativeModel("gemini-3.6-flash").generate_content(prompt).text)
+                            try:
+                                genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+                                prompt = f"現在時間是2026年10月，請以資深分析師角度，預估台股 {display_title} ({s_ind}) 2027年全年的 EPS 展望與營運動能，字數100字內。"
+                                try:
+                                    res = genai.GenerativeModel("gemini-1.5-flash").generate_content(prompt)
+                                except:
+                                    res = genai.GenerativeModel("gemini-1.5-flash-8b").generate_content(prompt)
+                                st.success(res.text)
+                            except Exception as e:
+                                st.error("⚠️ 伺服器忙線中或限流，請稍後再試！")
 
             # --- ⛽ 第二柱：籌碼面 ---
             with col2:
@@ -436,9 +443,16 @@ with tab3:
                 if "GEMINI_API_KEY" in st.secrets:
                     if st.button("🤖 制定停損利計畫", key="ai_tech"):
                         with st.spinner("計算風報比中..."):
-                            genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-                            prompt = f"目標股票【{display_title}】，現價 {curr_p}。季線 {key_prices['ma60']}，近期高點壓力 {key_prices['pressure']}，近期低點支撐 {key_prices['support']}，目前KD值(K:{key_prices['k_val']}, D:{key_prices['d_val']})，RSI為{key_prices['rsi_val']}。請根據以上技術數據，提供明確的進場區間、停損價、停利價。100字內，語氣果斷。"
-                            st.warning(genai.GenerativeModel("gemini-3.6-flash").generate_content(prompt).text)
+                            try:
+                                genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+                                prompt = f"目標股票【{display_title}】，現價 {curr_p}。季線 {key_prices['ma60']}，近期高點壓力 {key_prices['pressure']}，近期低點支撐 {key_prices['support']}，目前KD值(K:{key_prices['k_val']}, D:{key_prices['d_val']})，RSI為{key_prices['rsi_val']}。請根據以上技術數據，提供明確的進場區間、停損價、停利價。100字內，語氣果斷。"
+                                try:
+                                    res = genai.GenerativeModel("gemini-1.5-flash").generate_content(prompt)
+                                except:
+                                    res = genai.GenerativeModel("gemini-1.5-flash-8b").generate_content(prompt)
+                                st.warning(res.text)
+                            except Exception as e:
+                                st.error("⚠️ 伺服器忙線中或限流，請稍後再試！")
 
             st.markdown("---")
             
@@ -447,23 +461,27 @@ with tab3:
                 st.markdown("### 👑 戰情室終極大腦")
                 if st.button("🚀 生成【公司業務 / 同業競品 / 實戰綜合總結】", use_container_width=True):
                     with st.spinner("正在整合基本面、籌碼面、技術面數據，撰寫終極戰情報告..."):
-                        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-                        
-                        master_prompt = f"""
-                        現在時間是2026年10月。你是一位頂尖的台股操盤手兼產業分析師。請針對【{display_title}】產出一份「終極戰情報告」。
-                        
-                        【系統偵測數據】
-                        - 綜合總分：{score} / 100 ({light})
-                        - 產業板塊：{s_ind}
-                        - 基本得分：{f_score}/40 (重點：{f_details['毛利率'][2]} / {f_details['EPS YoY'][2]})
-                        - 籌碼得分：{c_score}/20 (重點：{c_details['投信防守'][2]} / {c_details['大戶增減'][2]})
-                        - 技術得分：{t_score}/40 (重點：{t_details['季線防守'][2]} / {t_details['KD與RSI'][2]} / {t_details['底部型態'][2]})
-                        
-                        請提供以下三個段落的精要分析（使用 Markdown 排版，語氣專業果斷）：
-                        1. 👑 **【公司業務與核心題材】**：這家公司主要做什麼？有什麼潛在利多題材或供應鏈地位？
-                        2. 🏢 **【同業競品與關聯股】**：列出 3-5 檔同產業或具備相同題材的關聯股票，供替換觀察。
-                        3. 🎯 **【戰情室綜合診斷】**：請根據上述硬數據與分數，告訴我這檔股票目前的「真實位階」，以及最終的操作定調（例如：適合波段重倉、適合零股試單、或是有跌破風險建議放棄）。
-                        """
-                        
-                        final_res = genai.GenerativeModel("gemini-3.6-flash").generate_content(master_prompt)
-                        st.info(final_res.text)
+                        try:
+                            genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+                            master_prompt = f"""
+                            現在時間是2026年10月。你是一位頂尖的台股操盤手兼產業分析師。請針對【{display_title}】產出一份「終極戰情報告」。
+                            
+                            【系統偵測數據】
+                            - 綜合總分：{score} / 100 ({light})
+                            - 產業板塊：{s_ind}
+                            - 基本得分：{f_score}/40 (重點：{f_details['毛利率'][2]} / {f_details['EPS YoY'][2]})
+                            - 籌碼得分：{c_score}/20 (重點：{c_details['投信防守'][2]} / {c_details['大戶增減'][2]})
+                            - 技術得分：{t_score}/40 (重點：{t_details['季線防守'][2]} / {t_details['KD與RSI'][2]} / {t_details['底部型態'][2]})
+                            
+                            請提供以下三個段落的精要分析（使用 Markdown 排版，語氣專業果斷）：
+                            1. 👑 **【公司業務與核心題材】**：這家公司主要做什麼？有什麼潛在利多題材或供應鏈地位？
+                            2. 🏢 **【同業競品與關聯股】**：列出 3-5 檔同產業或具備相同題材的關聯股票，供替換觀察。
+                            3. 🎯 **【戰情室綜合診斷】**：請根據上述硬數據與分數，告訴我這檔股票目前的「真實位階」，以及最終的操作定調（例如：適合波段重倉、適合零股試單、或是有跌破風險建議放棄）。
+                            """
+                            try:
+                                final_res = genai.GenerativeModel("gemini-1.5-flash").generate_content(master_prompt)
+                            except:
+                                final_res = genai.GenerativeModel("gemini-1.5-flash-8b").generate_content(master_prompt)
+                            st.info(final_res.text)
+                        except Exception as e:
+                            st.error("⚠️ 伺服器忙線中或限流，請稍後再試！")
