@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 import requests, io, json, os
+import concurrent.futures
 from datetime import datetime, timedelta
 import google.generativeai as genai
 
@@ -36,28 +37,39 @@ if not check_password():
 
 st.title("🎯 台股量化作戰室：三柱共振 ＆ AI 決策系統")
 
-# 產業分類與本益比基準
+# --- ⚙️ 系統設定與常數 ---
 INDUSTRY_MAP = {
     "半導體業": "半導體 / 先進製程 / 封測",
     "電腦及週邊設備業": "電腦硬體 / AI伺服器代工",
-    "電子零組件業": "電子零組件 / PCB / 散熱",
+    "電子零組件業": "電子零組件 / PCB / 散熱 / 被動元件",
     "通信網路業": "網通設備 / CPO光通訊",
-    "電機機械": "重電設備 / 綠能電網",
-    "電機機械業": "重電設備 / 綠能電網"
+    "電機機械": "重電設備 / 綠能電網 / 電線電纜",
+    "電機機械業": "重電設備 / 綠能電網 / 電線電纜",
+    "電子通路業": "電子零組件通路商",
+    "資訊服務業": "資訊軟體 / 系統整合",
+    "化學工業": "化學工業 / 特用化學",
+    "鋼鐵工業": "鋼鐵鋼筋",
+    "生技醫療業": "生技醫療",
+    "航運業": "航運航港 / 貨櫃 / 航空"
 }
 
 INDUSTRY_PE_BENCHMARK = {
     "半導體 / 先進製程 / 封測": {"low": 15, "mid": 20, "high": 25},
     "電腦硬體 / AI伺服器代工": {"low": 12, "mid": 16, "high": 22},
-    "電子零組件 / PCB / 散熱": {"low": 14, "mid": 18, "high": 25},
+    "電子零組件 / PCB / 散熱 / 被動元件": {"low": 14, "mid": 18, "high": 25},
     "網通設備 / CPO光通訊": {"low": 16, "mid": 22, "high": 30},
-    "重電設備 / 綠能電網": {"low": 15, "mid": 20, "high": 28},
+    "重電設備 / 綠能電網 / 電線電纜": {"low": 15, "mid": 20, "high": 28},
+    "電子零組件通路商": {"low": 10, "mid": 12, "high": 15},
+    "資訊軟體 / 系統整合": {"low": 18, "mid": 24, "high": 32},
+    "化學工業 / 特用化學": {"low": 12, "mid": 15, "high": 20},
+    "生技醫療": {"low": 18, "mid": 25, "high": 35},
     "其他板塊": {"low": 12, "mid": 15, "high": 20}
 }
 
+# --- 📂 資料獲取模組 ---
 @st.cache_data(ttl=86400)
 def get_tw_stock_meta():
-    headers = {'User-Agent': 'Mozilla/5.0'}
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     name_map, industry_map = {}, {}
     urls = [
         "https://isin.twse.com.tw/isin/C_public.jsp?strMode=2",
@@ -76,7 +88,7 @@ def get_tw_stock_meta():
                     name_map[raw[0]] = raw[1]
                     name_map[ticker] = raw[1]
                     raw_ind = str(row.get('產業別', '其他')).strip()
-                    ind = INDUSTRY_MAP.get(raw_ind, "其他板塊")
+                    ind = INDUSTRY_MAP.get(raw_ind, raw_ind)
                     industry_map[raw[0]] = ind
                     industry_map[ticker] = ind
         except:
@@ -100,7 +112,7 @@ def get_active_market_stocks():
             return df
     except:
         pass
-    return pd.DataFrame([{"id": "2303", "name": "聯電", "volume": 50000, "close": 50}])
+    return pd.DataFrame([{"id": "2330", "name": "台積電", "volume": 50000, "close": 1000}])
 
 @st.cache_data(ttl=86400)
 def get_fundamental_info(symbol):
@@ -124,7 +136,7 @@ def get_stock_history(symbol):
             return hist
     return pd.DataFrame()
 
-# 【技術指標運算核心 (含 KD、RSI、布林通道)】
+# --- 📈 技術指標與型態引擎 ---
 def calculate_indicators(df):
     close = df['Close'].astype(float)
     df['MA5'] = close.rolling(5).mean()
@@ -156,7 +168,6 @@ def calculate_indicators(df):
     
     return df
 
-# 【型態辨識引擎 (升級版)】
 def detect_bottom_patterns(df):
     if len(df) < 60: return ""
     close = df['Close']
@@ -262,13 +273,12 @@ def get_real_chip_data(symbol, current_price):
     return s_trust + s_big + s_foreign, {"投信防守": (s_trust, 8, desc_trust), "大戶增減": (s_big, 8, desc_big), "外資佈局": (s_foreign, 4, desc_foreign)}
 
 def evaluate_single_stock(info, hist, symbol, s_ind):
-    # 【第三柱：技術面 (四等分矩陣，滿分 40分)】
     curr_p = round(hist['Close'].iloc[-1], 2)
     ma60 = round(hist['MA60'].iloc[-1], 2)
     vol_today = hist['Volume'].iloc[-1]
     vol_ma20 = hist['Volume'].rolling(20).mean().iloc[-1]
     
-    # 1. 季線防守 (10分)
+    # --- 第三柱：技術面 (40分) ---
     bias60 = round(((curr_p - ma60) / ma60) * 100, 2)
     if 0 <= bias60 <= 10.0:
         s_ma60, desc_ma60 = 10, f"✅ 站上季線且乖離僅 {bias60}% (極低風險區)"
@@ -277,7 +287,6 @@ def evaluate_single_stock(info, hist, symbol, s_ind):
     else:
         s_ma60, desc_ma60 = 0, f"❌ 跌破季線 (乖離 {bias60}%)"
 
-    # 2. 布林通道 (10分)
     bb_up = hist['BB_UP'].iloc[-1]
     bb_width = hist['BB_WIDTH'].iloc[-1]
     if bb_width < 0.12 and curr_p >= bb_up * 0.99 and vol_today > vol_ma20 * 1.3:
@@ -287,11 +296,9 @@ def evaluate_single_stock(info, hist, symbol, s_ind):
     else:
         s_bb, desc_bb = 0, f"❌ 跌破布林中軌，趨勢轉弱"
 
-    # 3. KD 與 RSI 雙重動能 (10分)
     k_val = round(hist['K'].iloc[-1], 1)
     d_val = round(hist['D'].iloc[-1], 1)
     rsi_val = round(hist['RSI'].iloc[-1], 1)
-    
     if k_val > d_val and rsi_val >= 50:
         s_kdrsi, desc_kdrsi = 10, f"✅ KD金叉 (K:{k_val}) 且 RSI 站上多方 ({rsi_val})"
     elif k_val > d_val or rsi_val >= 50:
@@ -299,7 +306,6 @@ def evaluate_single_stock(info, hist, symbol, s_ind):
     else:
         s_kdrsi, desc_kdrsi = 0, f"❌ KD死叉且 RSI 弱勢 ({rsi_val})"
 
-    # 4. 底部起漲型態 (10分)
     pattern = detect_bottom_patterns(hist)
     if pattern:
         s_pat, desc_pat = 10, f"🔥 命中底部型態：{pattern}"
@@ -307,14 +313,9 @@ def evaluate_single_stock(info, hist, symbol, s_ind):
         s_pat, desc_pat = 0, "⚪ 無特殊底部反轉型態"
 
     tech_total = s_ma60 + s_bb + s_kdrsi + s_pat
-    tech_details = {
-        "季線防守": (s_ma60, 10, desc_ma60), 
-        "布林軌道": (s_bb, 10, desc_bb), 
-        "KD與RSI": (s_kdrsi, 10, desc_kdrsi), 
-        "底部型態": (s_pat, 10, desc_pat)
-    }
+    tech_details = {"季線防守": (s_ma60, 10, desc_ma60), "布林軌道": (s_bb, 10, desc_bb), "KD與RSI": (s_kdrsi, 10, desc_kdrsi), "底部型態": (s_pat, 10, desc_pat)}
 
-    # 【第一柱：基本面 (動態四均分，滿分 40分)】
+    # --- 第一柱：基本面 (40分) ---
     valid_max = 0
     s_gm, s_om, s_yoy, s_pe = 0, 0, 0, 0
     
@@ -355,19 +356,14 @@ def evaluate_single_stock(info, hist, symbol, s_ind):
     final_fund_score = int((fund_earned / valid_max) * 40) if valid_max > 0 else 0
     fund_details = {"毛利率": (s_gm, 10, desc_gm), "營益率": (s_om, 10, desc_om), "EPS YoY": (s_yoy, 10, desc_yoy), "本益比": (s_pe, 10, desc_pe)}
 
-    # 【第二柱：籌碼面 (滿分 20分)】
+    # --- 第二柱：籌碼面 (20分) ---
     s_chip_total, chip_details = get_real_chip_data(symbol, curr_p)
     
     total_score = final_fund_score + s_chip_total + tech_total
     light = "🟢 超級起漲" if total_score >= 85 else ("🟡 潛力加溫" if total_score >= 65 else "⚪ 區間觀望")
     
-    pillars = {
-        "Fund": (final_fund_score, fund_details),
-        "Chip": (s_chip_total, chip_details),
-        "Tech": (tech_total, tech_details)
-    }
+    pillars = {"Fund": (final_fund_score, fund_details), "Chip": (s_chip_total, chip_details), "Tech": (tech_total, tech_details)}
     
-    # 算好給 AI 停損利計畫的關鍵點位與指標
     key_prices = {
         "pressure": round(hist['High'].iloc[-60:].max(), 2),
         "support": round(hist['Low'].iloc[-30:].min(), 2),
@@ -380,15 +376,81 @@ def evaluate_single_stock(info, hist, symbol, s_ind):
     return total_score, light, pillars, key_prices, curr_p
 
 # ==================== UI 介面開始 ====================
-tab1, tab3 = st.tabs(["🚀 起漲掃描", "🔍 個股診斷 ＆ 戰情室大腦"])
+tab1, tab3 = st.tabs(["🚀 即時起漲雷達", "🔍 個股深度 AI 診斷"])
 
+# ==================== 分頁一：即時起漲雷達 (取代 Email) ====================
 with tab1:
-    st.info("起漲掃描模組準備就緒。在未來的擴充中可以在此加入批次掃描邏輯！")
+    st.subheader("⚡ 即時盤中/尾盤起漲雷達（點擊即時掃描）")
+    st.caption("自動過濾全市場爆量動能股，精準捕捉【均線糾結 / 箱型突破 / 破底翻 / VCP】發動起漲點。")
+
+    col_btn, col_opt = st.columns([1, 2])
+    with col_btn:
+        run_scan = st.button("🚀 立即掃描當前符合型態股票", use_container_width=True)
+    with col_opt:
+        scan_scope = st.slider("掃描市場活絡股數量（成交量前 N 名）", min_value=30, max_value=120, value=60, step=10)
+
+    if run_scan:
+        with st.spinner(f"正在即時運算市場成交量前 {scan_scope} 檔標的之 K 線型態與爆量結構..."):
+            market_stocks = get_active_market_stocks().sort_values(by="volume", ascending=False)
+            candidates = market_stocks.head(scan_scope)
+            buy_signals = []
+            
+            def quick_scan(row):
+                sid = str(row['id'])
+                sname = name_map.get(sid, str(row.get('name', '')))
+                sind = industry_map.get(sid, "其他板塊")
+                
+                hist = get_stock_history(sid)
+                if hist.empty or len(hist) < 60: return None
+                    
+                close, vol, high, low = hist['Close'].astype(float), hist['Volume'].astype(float), hist['High'].astype(float), hist['Low'].astype(float)
+                curr_price, vol_today, vol_ma20 = round(close.iloc[-1], 2), vol.iloc[-1], vol.rolling(20).mean().iloc[-1]
+                ma20 = close.rolling(20).mean().iloc[-1]
+                
+                if vol_ma20 > 0 and vol_today >= (vol_ma20 * 1.2) and curr_price >= ma20:
+                    pattern_type, score, struct_stop = "", 0, ma20
+                    ma_prev = [close.rolling(5).mean().iloc[-2], close.rolling(10).mean().iloc[-2], close.rolling(20).mean().iloc[-2]]
+                    
+                    if (max(ma_prev) - min(ma_prev)) / min(ma_prev) <= 0.03 and curr_price > max(ma_prev):
+                        pattern_type, struct_stop, score = "均線極致糾結突破", min(ma_prev), 85
+                    elif (high.iloc[-31:-1].max() - low.iloc[-31:-1].min()) / low.iloc[-31:-1].min() <= 0.15 and curr_price > high.iloc[-31:-1].max():
+                        pattern_type, struct_stop, score = "箱型整理強勢突破", (high.iloc[-31:-1].max() + low.iloc[-31:-1].min()) / 2, 88
+                    elif low.iloc[-15:-3].min() < low.iloc[-60:-15].min() and curr_price > high.iloc[-15:-1].max():
+                        pattern_type, struct_stop, score = "破底翻大底起漲", low.iloc[-15:-1].min(), 90
+
+                    if pattern_type:
+                        pressure_point = high.iloc[-60:].max()
+                        target_price = curr_price * 1.1 if curr_price >= pressure_point * 0.98 else pressure_point
+                        return {"代號": sid, "名稱": sname, "產業": sind, "現價": curr_price, "觸發型態": pattern_type, "建議停損": round(struct_stop, 2), "目標停利": round(target_price, 2), "放量倍數": f"{round(vol_today / vol_ma20, 2)}x", "評分": score}
+                return None
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+                for f in concurrent.futures.as_completed([executor.submit(quick_scan, row) for _, row in candidates.iterrows()]):
+                    res = f.result()
+                    if res: buy_signals.append(res)
+            
+            if buy_signals:
+                df_result = pd.DataFrame(buy_signals).sort_values(by="評分", ascending=False)
+                st.success(f"🎯 掃描完成！目前市場上有 {len(df_result)} 檔標的符合爆量起漲型態：")
+                top_cols = st.columns(min(len(df_result), 3))
+                for i in range(min(len(df_result), 3)):
+                    item = df_result.iloc[i]
+                    with top_cols[i]:
+                        st.markdown(f"#### 🏆 No.{i+1} {item['代號']} {item['名稱']}")
+                        st.info(f"**{item['觸發型態']}** (量能 {item['放量倍數']})")
+                        st.write(f"🏢 產業：{item['產業']}")
+                        st.write(f"💰 現價：**${item['現價']}**")
+                        st.write(f"🎯 目標價：${item['目標停利']} ｜ 🚨 防守價：${item['建議停損']}")
+                st.markdown("---")
+                st.markdown("### 📋 完整符合清單")
+                st.dataframe(df_result, use_container_width=True)
+            else:
+                st.warning("目前盤面活絡標的中，暫無符合嚴格突破型態之個股，建議空倉觀望。")
 
 # ==================== 分頁三：個股深度診斷 ====================
 with tab3:
     st.subheader("🔍 個股深度診斷 ＆ 三相評分儀表板")
-    target_stock = st.text_input("請輸入台股代號（例：3617, 2303, 6278）：", value="2303")
+    target_stock = st.text_input("請輸入台股代號（例：2330, 2303, 6278）：", value="2330")
 
     if target_stock:
         info = get_fundamental_info(target_stock)
@@ -406,7 +468,6 @@ with tab3:
             
             col1, col2, col3 = st.columns(3)
             
-            # --- 🏛️ 第一柱：基本面 ---
             with col1:
                 f_score, f_details = pillars["Fund"]
                 st.markdown(f"### 🏛️ 基本防雷 ({f_score}/40)")
@@ -424,15 +485,13 @@ with tab3:
                                     res = genai.GenerativeModel("gemini-1.5-flash-8b").generate_content(prompt)
                                 st.success(res.text)
                             except Exception as e:
-                                st.error("⚠️ 伺服器忙線中或限流，請稍後再試！")
+                                st.error(f"⚠️ 系統錯誤，詳細原因：{e}")
 
-            # --- ⛽ 第二柱：籌碼面 ---
             with col2:
                 c_score, c_details = pillars["Chip"]
                 st.markdown(f"### ⛽ 主力燃料 ({c_score}/20)")
                 for k, (s, m, desc) in c_details.items(): st.write(f"- {desc}")
 
-            # --- 🔫 第三柱：技術面 ---
             with col3:
                 t_score, t_details = pillars["Tech"]
                 st.markdown(f"### 🔫 買點扳機 ({t_score}/40)")
@@ -452,11 +511,10 @@ with tab3:
                                     res = genai.GenerativeModel("gemini-1.5-flash-8b").generate_content(prompt)
                                 st.warning(res.text)
                             except Exception as e:
-                                st.error("⚠️ 伺服器忙線中或限流，請稍後再試！")
+                                st.error(f"⚠️ 系統錯誤，詳細原因：{e}")
 
             st.markdown("---")
             
-            # --- 👑 終極大腦：公司業務與綜合解析 ---
             if "GEMINI_API_KEY" in st.secrets:
                 st.markdown("### 👑 戰情室終極大腦")
                 if st.button("🚀 生成【公司業務 / 同業競品 / 實戰綜合總結】", use_container_width=True):
@@ -476,7 +534,7 @@ with tab3:
                             請提供以下三個段落的精要分析（使用 Markdown 排版，語氣專業果斷）：
                             1. 👑 **【公司業務與核心題材】**：這家公司主要做什麼？有什麼潛在利多題材或供應鏈地位？
                             2. 🏢 **【同業競品與關聯股】**：列出 3-5 檔同產業或具備相同題材的關聯股票，供替換觀察。
-                            3. 🎯 **【戰情室綜合診斷】**：請根據上述硬數據與分數，告訴我這檔股票目前的「真實位階」，以及最終的操作定調（例如：適合波段重倉、適合零股試單、或是有跌破風險建議放棄）。
+                            3. 🎯 **【戰情室綜合診斷】**：請根據上述硬數據與分數，告訴我這檔股票目前的「真實位階」，以及最終的操作定調。
                             """
                             try:
                                 final_res = genai.GenerativeModel("gemini-1.5-flash").generate_content(master_prompt)
@@ -484,4 +542,4 @@ with tab3:
                                 final_res = genai.GenerativeModel("gemini-1.5-flash-8b").generate_content(master_prompt)
                             st.info(final_res.text)
                         except Exception as e:
-                            st.error("⚠️ 伺服器忙線中或限流，請稍後再試！")
+                            st.error(f"⚠️ 系統錯誤，詳細原因：{e}")
