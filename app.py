@@ -409,18 +409,10 @@ with tab3:
                             try:
                                 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
                                 prompt = f"現在時間是2026年10月，請以資深分析師角度，預估台股 {display_title} ({s_ind}) 2027年全年的 EPS 展望與營運動能，字數100字內。"
-                                try:
-                                    res = genai.GenerativeModel("gemini-1.5-flash").generate_content(prompt)
-                                    st.success(res.text)
-                                except:
-                                    try:
-                                        # 最古老版本 SDK 的模型名稱
-                                        res = genai.GenerativeModel("gemini-pro").generate_content(prompt)
-                                        st.success(res.text)
-                                    except Exception as inner_e:
-                                        st.error(f"⚠ AI 模型呼叫失敗！請務必在 GitHub 的 requirements.txt 加上 `google-generativeai>=0.7.2` 以更新套件。詳細錯誤：{inner_e}")
+                                res = genai.GenerativeModel("gemini-1.5-flash").generate_content(prompt)
+                                st.success(res.text)
                             except Exception as e:
-                                st.error(f"⚠ 系統錯誤，詳細原因：{e}")
+                                st.error(f"⚠ AI 模型呼叫失敗！真實錯誤原因：{e}")
 
             with col2:
                 c_score, c_details = pillars["Chip"]
@@ -439,17 +431,10 @@ with tab3:
                             try:
                                 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
                                 prompt = f"目標股票【{display_title}】，現價 {curr_p}。季線 {key_prices['ma60']}，近期高點壓力 {key_prices['pressure']}，近期低點支撐 {key_prices['support']}，目前KD值(K:{key_prices['k_val']}, D:{key_prices['d_val']})，RSI為{key_prices['rsi_val']}。請根據以上技術數據，提供明確的進場區間、停損價、停利價。100字內，語氣果斷。"
-                                try:
-                                    res = genai.GenerativeModel("gemini-1.5-flash").generate_content(prompt)
-                                    st.warning(res.text)
-                                except:
-                                    try:
-                                        res = genai.GenerativeModel("gemini-pro").generate_content(prompt)
-                                        st.warning(res.text)
-                                    except Exception as inner_e:
-                                        st.error(f"⚠ AI 模型呼叫失敗！請務必在 GitHub 的 requirements.txt 加上 `google-generativeai>=0.7.2` 以更新套件。詳細錯誤：{inner_e}")
+                                res = genai.GenerativeModel("gemini-1.5-flash").generate_content(prompt)
+                                st.warning(res.text)
                             except Exception as e:
-                                st.error(f"⚠ 系統錯誤，詳細原因：{e}")
+                                st.error(f"⚠ AI 模型呼叫失敗！真實錯誤原因：{e}")
 
             st.markdown("---")
             if "GEMINI_API_KEY" in st.secrets:
@@ -471,14 +456,7 @@ with tab3:
                             2. 🏢 **【同業競品與關聯股】**：列出 3-5 檔同產業或具備相同題材的關聯股票，供替換觀察。
                             3. 🎯 **【戰情室綜合診斷】**：請根據上述硬數據與分數，告訴我這檔股票目前的「真實位階」，以及最終的操作定調。
                             """
-                            try:
-                                res = genai.GenerativeModel("gemini-1.5-flash").generate_content(master_prompt)
-                                st.info(res.text)
-                            except:
-                                try:
-                                    res = genai.GenerativeModel("gemini-pro").generate_content(master_prompt)
-                                    st.info(res.text)
-                                except Exception as inner_e:
-                                    st.error(f"⚠ AI 模型呼叫失敗！請務必在 GitHub 的 requirements.txt 加上 `google-generativeai>=0.7.2` 以更新套件。詳細錯誤：{inner_e}")
+                            res = genai.GenerativeModel("gemini-1.5-flash").generate_content(master_prompt)
+                            st.info(res.text)
                         except Exception as e:
-                            st.error(f"⚠️ 系統錯誤，詳細原因：{e}")
+                            st.error(f"⚠️ AI 模型呼叫失敗！真實錯誤原因：{e}")
