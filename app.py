@@ -105,7 +105,7 @@ def get_fundamental_info(symbol):
     return {}
 
 def get_stock_history(symbol):
-    # 這裡的 timeout=3 是防止 Yahoo 伺服器已讀不回的終極防護網
+    # timeout=3 防 Yahoo 伺服器卡死
     for suffix in [".TW", ".TWO"]:
         try:
             hist = yf.download(f"{symbol}{suffix}", period="6mo", progress=False, timeout=3)
@@ -280,13 +280,16 @@ with tab1:
     with col_btn:
         run_scan = st.button("🚀 立即掃描低風險支撐股", use_container_width=True)
     with col_opt:
-        scan_limit = st.slider("掃描前 N 檔活絡標的", min_value=50, max_value=300, value=150, step=50)
+        # 解除 300 檔限制，改以「最低成交量門檻」來決定過濾範圍
+        min_vol_limit = st.slider("設定今日最低成交量門檻 (張)", min_value=500, max_value=5000, value=1500, step=500)
 
     if run_scan:
         market_stocks = get_active_market_stocks()
-        filtered_stocks = market_stocks.sort_values(by="volume", ascending=False).head(scan_limit)
         
-        with st.spinner(f"正在分析 {len(filtered_stocks)} 檔標的之回測支撐與歷史爆量軌跡..."):
+        # 只要成交量大於門檻，全部納入掃描範圍，不再被 .head() 限制
+        filtered_stocks = market_stocks[market_stocks['volume'] >= min_vol_limit].sort_values(by="volume", ascending=False)
+        
+        with st.spinner(f"正在分析全市場 {len(filtered_stocks)} 檔高流動性標的... (請耐心等候，約需幾十秒)"):
             buy_signals = []
             
             def quick_scan(row):
@@ -382,7 +385,8 @@ with tab1:
 # ==================== 分頁三：個股深度診斷 ====================
 with tab3:
     st.subheader("🔍 個股深度診斷 ＆ 三相評分儀表板")
-    target_stock = st.text_input("請輸入台股代號（例：2330, 2303, 6278）：", value="2330")
+    # 清空預設，還原為空或台積電
+    target_stock = st.text_input("請輸入台股代號（例：2330, 4960, 2303）：", value="2330")
 
     if target_stock:
         info = get_fundamental_info(target_stock)
@@ -403,12 +407,17 @@ with tab3:
                 f_score, f_details = pillars["Fund"]
                 st.markdown(f"### 🏛️ 基本防雷 ({f_score}/40)")
                 for k, (s, m, desc) in f_details.items(): st.write(f"- {desc}")
+                
                 if "GEMINI_API_KEY" in st.secrets:
                     if st.button("🤖 預估 2027 年 EPS", key="ai_eps"):
                         with st.spinner("解析法說會展望..."):
                             try:
                                 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-                                res = genai.GenerativeModel("gemini-1.5-flash").generate_content(f"現在時間是2026年10月，請以資深分析師角度，預估台股 {display_title} ({s_ind}) 2027年全年的 EPS 展望與營運動能，字數100字內。")
+                                prompt = f"現在時間是2026年10月，請以資深分析師角度，預估台股 {display_title} ({s_ind}) 2027年全年的 EPS 展望與營運動能，字數100字內。"
+                                try:
+                                    res = genai.GenerativeModel("gemini-1.5-flash-latest").generate_content(prompt)
+                                except:
+                                    res = genai.GenerativeModel("gemini-1.0-pro").generate_content(prompt)
                                 st.success(res.text)
                             except Exception as e:
                                 st.error(f"⚠ 系統錯誤，詳細原因：{e}")
@@ -423,15 +432,20 @@ with tab3:
                 st.markdown(f"### 🔫 買點扳機 ({t_score}/40)")
                 for k, (s, m, desc) in t_details.items(): st.write(f"- {desc}")
                 st.markdown(f"**🎯 運算關鍵價**：前高壓力 ${key_prices['pressure']} ｜ 季線防禦 ${key_prices['ma60']}")
+                
                 if "GEMINI_API_KEY" in st.secrets:
                     if st.button("🤖 制定停損利計畫", key="ai_tech"):
                         with st.spinner("計算風報比中..."):
                             try:
                                 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-                                res = genai.GenerativeModel("gemini-1.5-flash").generate_content(f"目標股票【{display_title}】，現價 {curr_p}。季線 {key_prices['ma60']}，近期高點壓力 {key_prices['pressure']}，近期低點支撐 {key_prices['support']}，目前KD值(K:{key_prices['k_val']}, D:{key_prices['d_val']})，RSI為{key_prices['rsi_val']}。請根據以上技術數據，提供明確的進場區間、停損價、停利價。100字內，語氣果斷。")
+                                prompt = f"目標股票【{display_title}】，現價 {curr_p}。季線 {key_prices['ma60']}，近期高點壓力 {key_prices['pressure']}，近期低點支撐 {key_prices['support']}，目前KD值(K:{key_prices['k_val']}, D:{key_prices['d_val']})，RSI為{key_prices['rsi_val']}。請根據以上技術數據，提供明確的進場區間、停損價、停利價。100字內，語氣果斷。"
+                                try:
+                                    res = genai.GenerativeModel("gemini-1.5-flash-latest").generate_content(prompt)
+                                except:
+                                    res = genai.GenerativeModel("gemini-1.0-pro").generate_content(prompt)
                                 st.warning(res.text)
                             except Exception as e:
-                                st.error(f"⚠️ 系統錯誤，詳細原因：{e}")
+                                st.error(f"⚠ 系統錯誤，詳細原因：{e}")
 
             st.markdown("---")
             if "GEMINI_API_KEY" in st.secrets:
@@ -453,7 +467,10 @@ with tab3:
                             2. 🏢 **【同業競品與關聯股】**：列出 3-5 檔同產業或具備相同題材的關聯股票，供替換觀察。
                             3. 🎯 **【戰情室綜合診斷】**：請根據上述硬數據與分數，告訴我這檔股票目前的「真實位階」，以及最終的操作定調。
                             """
-                            res = genai.GenerativeModel("gemini-1.5-flash").generate_content(master_prompt)
+                            try:
+                                res = genai.GenerativeModel("gemini-1.5-flash-latest").generate_content(master_prompt)
+                            except:
+                                res = genai.GenerativeModel("gemini-1.0-pro").generate_content(master_prompt)
                             st.info(res.text)
                         except Exception as e:
                             st.error(f"⚠️ 系統錯誤，詳細原因：{e}")
