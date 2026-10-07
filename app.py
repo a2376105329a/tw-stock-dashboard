@@ -314,24 +314,24 @@ with tab3:
             st.markdown(f"## {display_title} ｜ 綜合總分：{score} 分 ({light})")
             st.info(f"🏢 產業板塊：{s_ind} ｜ 現價：${curr_p}")
             
-            # --- 🤖 終極解法：直連 API 伺服器，開除出問題的套件 ---
+            # --- 🤖 終極直連脫困解法：完全擺脫套件，延長至 60 秒 ---
             def get_gemini_response_direct(prompt_text):
                 api_key = st.secrets.get("GEMINI_API_KEY")
                 if not api_key: return "❌ 找不到 API Key，請檢查 Streamlit Secrets 設定。"
                 
-                # 直接呼叫 Google 指定的 3.8-flash 模型，並強制設定 timeout 不准卡死
+                # 直接使用 Google 要求的 3.8-flash 模型，並將 timeout 延長至 60 秒
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={api_key}"
                 headers = {'Content-Type': 'application/json'}
                 payload = {"contents": [{"parts": [{"text": prompt_text}]}]}
                 
                 try:
-                    res = requests.post(url, headers=headers, json=payload, timeout=12)
+                    res = requests.post(url, headers=headers, json=payload, timeout=60)
                     if res.status_code == 200:
                         return res.json()['candidates'][0]['content']['parts'][0]['text']
                     else:
                         return f"❌ 伺服器拒絕連線，代碼 {res.status_code}：\n{res.text}"
                 except requests.exceptions.Timeout:
-                    return "❌ API 連線逾時 (超過 12 秒)，Google 伺服器無回應，請稍後再試。"
+                    return "❌ API 連線逾時 (超過 60 秒)，Google 伺服器無回應，請稍後再試。"
                 except Exception as e:
                     return f"❌ 呼叫失敗：{e}"
             
@@ -343,7 +343,7 @@ with tab3:
                 
                 if "GEMINI_API_KEY" in st.secrets:
                     if st.button("🤖 預估 2027 年 EPS", key="ai_eps"):
-                        with st.spinner("強制直連 Google 伺服器中... (最多等待 12 秒)"):
+                        with st.spinner("強制直連 Google 伺服器中... (最多等待 60 秒)"):
                             prompt = f"現在時間是2026年10月，請以資深分析師角度，預估台股 {display_title} ({s_ind}) 2027年全年的 EPS 展望與營運動能，字數100字內。"
                             result = get_gemini_response_direct(prompt)
                             if "❌" in result: st.error(result)
@@ -362,7 +362,7 @@ with tab3:
                 
                 if "GEMINI_API_KEY" in st.secrets:
                     if st.button("🤖 制定停損利計畫", key="ai_tech"):
-                        with st.spinner("強制直連 Google 伺服器中... (最多等待 12 秒)"):
+                        with st.spinner("強制直連 Google 伺服器中... (最多等待 60 秒)"):
                             prompt = f"目標股票【{display_title}】，現價 {curr_p}。季線 {key_prices['ma60']}，近期高點壓力 {key_prices['pressure']}，近期低點支撐 {key_prices['support']}，目前KD值(K:{key_prices['k_val']}, D:{key_prices['d_val']})，RSI為{key_prices['rsi_val']}。請根據以上技術數據，提供明確的進場區間、停損價、停利價。100字內，語氣果斷。"
                             result = get_gemini_response_direct(prompt)
                             if "❌" in result: st.error(result)
@@ -372,7 +372,7 @@ with tab3:
             if "GEMINI_API_KEY" in st.secrets:
                 st.markdown("### 👑 戰情室終極大腦")
                 if st.button("🚀 生成【公司業務 / 同業競品 / 實戰綜合總結】", use_container_width=True):
-                    with st.spinner("強制直連 Google 伺服器中... (最多等待 12 秒)"):
+                    with st.spinner("強制直連 Google 伺服器中... (最多等待 60 秒)"):
                         master_prompt = f"""
                         現在時間是2026年10月。你是一位頂尖的台股操盤手兼產業分析師。請針對【{display_title}】產出一份「終極戰情報告」。
                         【系統偵測數據】
@@ -384,7 +384,7 @@ with tab3:
                         請提供以下三個段落的精要分析（使用 Markdown 排版，語氣專業果斷）：
                         1. 👑 **【公司業務與核心題材】**：這家公司主要做什麼？有什麼潛在利多題材或供應鏈地位？
                         2. 🏢 **【同業競品與關聯股】**：列出 3-5 檔同產業或具備相同題材的關聯股票，供替換觀察。
-                        3. 🎯 **【戰情室綜合診斷】**：請根據上述硬數據與分數，告訴我這檔股票目前的「真實位階」，以及最終的操作定調。
+                        3. 🎯 **【戰情室綜合診斷】**：請根據上述硬數據與分數，告訴我這股票目前的「真實位階」，以及最終的操作定調。
                         """
                         result = get_gemini_response_direct(master_prompt)
                         if "❌" in result: st.error(result)
