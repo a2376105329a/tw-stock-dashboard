@@ -56,7 +56,6 @@ INDUSTRY_PE_BENCHMARK = {
 def get_tw_stock_meta():
     name_map, industry_map = {}, {}
     try:
-        # 抓取上市股票名單 (光速 API)
         res_twse = requests.get("https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL", timeout=5)
         if res_twse.status_code == 200:
             for item in res_twse.json():
@@ -66,7 +65,6 @@ def get_tw_stock_meta():
                     name_map[code] = name
                     name_map[f"{code}.TW"] = name
                     
-        # 抓取上櫃股票名單 (光速 API)
         res_tpex = requests.get("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes", timeout=5)
         if res_tpex.status_code == 200:
             for item in res_tpex.json():
@@ -105,7 +103,6 @@ def get_fundamental_info(symbol):
     return {}
 
 def get_stock_history(symbol):
-    # timeout=3 防 Yahoo 伺服器卡死
     for suffix in [".TW", ".TWO"]:
         try:
             hist = yf.download(f"{symbol}{suffix}", period="6mo", progress=False, timeout=3)
@@ -139,43 +136,34 @@ def calculate_indicators(df):
     df['RSI'] = 100 - (100 / (1 + rs))
     return df
 
-# 針對 Tab 1 (回溯專用)：歷史某一天是否觸發七大爆發型態
 def detect_historical_breakout(df, idx):
     close, high, low, vol = df['Close'], df['High'], df['Low'], df['Volume']
     curr_price = close.iloc[idx]
     
-    # 1. 均線糾結
     ma_prev = [df['MA5'].iloc[idx-1], df['MA10'].iloc[idx-1], df['MA20'].iloc[idx-1], df['MA60'].iloc[idx-1]]
     if (max(ma_prev) - min(ma_prev)) / min(ma_prev) <= 0.04 and curr_price > max(ma_prev): return "均線極致糾結突破"
         
-    # 2. VCP
     range_old = high.iloc[idx-39:idx-19].max() - low.iloc[idx-39:idx-19].min()
     range_recent = high.iloc[idx-19:idx-1].max() - low.iloc[idx-19:idx-1].min()
     if range_recent < range_old * 0.6 and curr_price > high.iloc[idx-19:idx-1].max(): return "VCP 波動收縮起漲"
         
-    # 3. 箱型突破
     box_high = high.iloc[idx-30:idx-1].max()
     box_low = low.iloc[idx-30:idx-1].min()
     if (box_high - box_low) / box_low <= 0.15 and curr_price > box_high: return "箱型整理強勢突破"
         
-    # 4. 破底翻
     if low.iloc[idx-14:idx-1].min() < low.iloc[idx-59:idx-14].min() and curr_price > high.iloc[idx-14:idx-1].max(): return "破底翻大底起漲"
         
-    # 5. 頭肩底
     left, head, right = low.iloc[idx-59:idx-39].min(), low.iloc[idx-39:idx-19].min(), low.iloc[idx-19:idx-4].min()
     if head < left and head < right and abs(left - right) / right < 0.1:
         if curr_price >= high.iloc[idx-39:idx-4].max() * 0.98: return "頭肩底突破頸線"
             
-    # 6. W底
     if abs(low.iloc[idx-19:idx-4].min() - low.iloc[idx-59:idx-19].min()) / low.iloc[idx-59:idx-19].min() < 0.05 and curr_price > high.iloc[idx-19:idx-1].max():
         return "W底雙腳支撐突破"
         
-    # 7. 島型
     if high.iloc[idx-1] < low.iloc[idx-2] and low.iloc[idx] > high.iloc[idx-1]: return "島型竭盡反轉跳空"
         
     return ""
 
-# 針對 Tab 3 (當前健檢專用)
 def detect_bottom_patterns(df): return detect_historical_breakout(df, -1)
 
 @st.cache_data(ttl=3600)
@@ -241,20 +229,37 @@ def evaluate_single_stock(info, hist, symbol, s_ind):
     s_pat, desc_pat = (10, f"🔥 命中型態：{pattern}") if pattern else (0, "⚪ 無底部型態")
     tech_total, tech_details = s_ma60 + s_bb + s_kdrsi + s_pat, {"季線防守": (s_ma60, 10, desc_ma60), "布林軌道": (s_bb, 10, desc_bb), "KD與RSI": (s_kdrsi, 10, desc_kdrsi), "底部型態": (s_pat, 10, desc_pat)}
 
+    # --- 第一柱：基本面 (數據具體化) ---
     valid_max, s_gm, s_om, s_yoy, s_pe = 0, 0, 0, 0, 0
     gm, om, yoy, pe = info.get('grossMargins'), info.get('operatingMargins'), info.get('earningsQuarterlyGrowth'), info.get('trailingPE')
     pe_bench = INDUSTRY_PE_BENCHMARK.get(s_ind, {"low": 12, "mid": 15, "high": 20})
     
-    if gm is not None: valid_max += 10; s_gm, desc_gm = (10, f"✅ 毛利率達 {round(gm*100,1)}%") if gm >= 0.30 else ((5, f"🟡 毛利率 {round(gm*100,1)}%") if gm >= 0.15 else (0, f"❌ 毛利率偏低"))
+    if gm is not None:
+        valid_max += 10
+        if gm >= 0.30: s_gm, desc_gm = 10, f"✅ 毛利率達 {round(gm*100,1)}%"
+        elif gm >= 0.15: s_gm, desc_gm = 5, f"🟡 毛利率 {round(gm*100,1)}%"
+        else: s_gm, desc_gm = 0, f"❌ 毛利率僅 {round(gm*100,1)}% (偏低)"
     else: desc_gm = "⚪ 無資料"
     
-    if om is not None: valid_max += 10; s_om, desc_om = (10, f"✅ 營益率達 {round(om*100,1)}%") if om >= 0.10 else ((5, f"🟡 營益率 {round(om*100,1)}%") if om > 0 else (0, f"❌ 虧損"))
+    if om is not None:
+        valid_max += 10
+        if om >= 0.10: s_om, desc_om = 10, f"✅ 營益率達 {round(om*100,1)}%"
+        elif om > 0: s_om, desc_om = 5, f"🟡 營益率 {round(om*100,1)}%"
+        else: s_om, desc_om = 0, f"❌ 營益率 {round(om*100,1)}% (本業虧損)"
     else: desc_om = "⚪ 無資料"
     
-    if yoy is not None: valid_max += 10; s_yoy, desc_yoy = (10, f"✅ YoY {round(yoy*100,1)}%") if yoy >= 0.20 else ((5, f"🟡 YoY {round(yoy*100,1)}%") if yoy > 0 else (0, f"❌ 衰退"))
+    if yoy is not None:
+        valid_max += 10
+        if yoy >= 0.20: s_yoy, desc_yoy = 10, f"✅ YoY 爆發 {round(yoy*100,1)}%"
+        elif yoy > 0: s_yoy, desc_yoy = 5, f"🟡 YoY 成長 {round(yoy*100,1)}%"
+        else: s_yoy, desc_yoy = 0, f"❌ YoY 衰退 {round(yoy*100,1)}%"
     else: desc_yoy = "⚪ 無資料"
     
-    if pe is not None: valid_max += 10; s_pe, desc_pe = (10, f"✅ 本益比 {round(pe,1)}X (低於低標)") if pe < pe_bench['low'] else ((5, f"🟡 本益比 {round(pe,1)}X") if pe <= pe_bench['high'] else (0, f"❌ 本益比偏貴"))
+    if pe is not None:
+        valid_max += 10
+        if pe < pe_bench['low']: s_pe, desc_pe = 10, f"✅ 本益比 {round(pe,1)}X (低於低標 {pe_bench['low']}X)"
+        elif pe <= pe_bench['high']: s_pe, desc_pe = 5, f"🟡 本益比 {round(pe,1)}X (合理區間)"
+        else: s_pe, desc_pe = 0, f"❌ 本益比達 {round(pe,1)}X (高於高標 {pe_bench['high']}X，偏貴)"
     else: desc_pe = "⚪ 無資料"
 
     fund_earned = s_gm + s_om + s_yoy + s_pe
@@ -280,16 +285,13 @@ with tab1:
     with col_btn:
         run_scan = st.button("🚀 立即掃描低風險支撐股", use_container_width=True)
     with col_opt:
-        # 解除 300 檔限制，改以「最低成交量門檻」來決定過濾範圍
         min_vol_limit = st.slider("設定今日最低成交量門檻 (張)", min_value=500, max_value=5000, value=1500, step=500)
 
     if run_scan:
         market_stocks = get_active_market_stocks()
-        
-        # 只要成交量大於門檻，全部納入掃描範圍，不再被 .head() 限制
         filtered_stocks = market_stocks[market_stocks['volume'] >= min_vol_limit].sort_values(by="volume", ascending=False)
         
-        with st.spinner(f"正在分析全市場 {len(filtered_stocks)} 檔高流動性標的... (請耐心等候，約需幾十秒)"):
+        with st.spinner(f"正在分析全市場 {len(filtered_stocks)} 檔高流動性標的... (請耐心等候)"):
             buy_signals = []
             
             def quick_scan(row):
@@ -311,40 +313,34 @@ with tab1:
                 ma5, ma10, ma60 = hist['MA5'], hist['MA10'], hist['MA60']
                 rsi = round(hist['RSI'].iloc[-1], 1)
                 
-                # --- 第一關：量能降溫與大趨勢濾網 ---
                 if vol_ma5 <= 1500: return None
-                if vol_today >= vol_ma5: return None # 必須是量縮休息
+                if vol_today >= vol_ma5: return None 
                 if curr_price <= ma60.iloc[-1]: return None
-                if ma60.iloc[-1] <= ma60.iloc[-2]: return None # 季線必須翻揚向上
-                if not (50 <= rsi <= 65): return None # RSI 動能溫和區
+                if ma60.iloc[-1] <= ma60.iloc[-2]: return None 
+                if not (50 <= rsi <= 65): return None 
                 
-                # --- 第二關：短線極致防護網 (緊貼支撐) ---
                 bias_ma5 = (curr_price - ma5.iloc[-1]) / ma5.iloc[-1]
                 bias_ma10 = (curr_price - ma10.iloc[-1]) / ma10.iloc[-1]
-                
                 if not ((0 <= bias_ma5 <= 0.02) or (0 <= bias_ma10 <= 0.02)): return None
                 
-                # 確認地板有撐：今日收紅、收平、或留下影線
                 lower_shadow = min(curr_price, open_p.iloc[-1]) - low.iloc[-1]
                 real_body = abs(curr_price - open_p.iloc[-1])
                 is_supported = (curr_price >= close.iloc[-2]) or (lower_shadow > real_body and lower_shadow > 0)
                 if not is_supported: return None
                 
-                # --- 第三關：主力近期表態軌跡 (過去 3~10 天曾發動攻擊) ---
                 found_pattern = ""
                 trigger_days_ago = 0
-                
-                for i in range(-10, -2): # 回溯過去 3~10 天
+                for i in range(-10, -2): 
                     if vol.iloc[i] > vol_ma20.iloc[i] * 2 and close.iloc[i] > open_p.iloc[i]:
                         pat = detect_historical_breakout(hist, i)
                         if pat:
                             found_pattern = pat
-                            trigger_days_ago = abs(i) - 1 # 換算為實際天數
+                            trigger_days_ago = abs(i) - 1 
                             break
                             
                 if found_pattern:
-                    struct_stop = min(ma5.iloc[-1], ma10.iloc[-1]) # 嚴格防守線
-                    target_price = hist['High'].iloc[-60:].max() * 1.1 # 基礎翻區間預測
+                    struct_stop = min(ma5.iloc[-1], ma10.iloc[-1]) 
+                    target_price = hist['High'].iloc[-60:].max() * 1.1 
                     return {"代號": sid, "名稱": sname, "產業": sind, "現價": curr_price, "歷史發動點": f"{trigger_days_ago} 天前", "主力起漲型態": found_pattern, "建議停損": round(struct_stop, 2), "目標停利": round(target_price, 2), "RSI指標": rsi}
                 return None
 
@@ -385,7 +381,6 @@ with tab1:
 # ==================== 分頁三：個股深度診斷 ====================
 with tab3:
     st.subheader("🔍 個股深度診斷 ＆ 三相評分儀表板")
-    # 清空預設，還原為空或台積電
     target_stock = st.text_input("請輸入台股代號（例：2330, 4960, 2303）：", value="2330")
 
     if target_stock:
@@ -415,10 +410,15 @@ with tab3:
                                 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
                                 prompt = f"現在時間是2026年10月，請以資深分析師角度，預估台股 {display_title} ({s_ind}) 2027年全年的 EPS 展望與營運動能，字數100字內。"
                                 try:
-                                    res = genai.GenerativeModel("gemini-1.5-flash-latest").generate_content(prompt)
+                                    res = genai.GenerativeModel("gemini-1.5-flash").generate_content(prompt)
+                                    st.success(res.text)
                                 except:
-                                    res = genai.GenerativeModel("gemini-1.0-pro").generate_content(prompt)
-                                st.success(res.text)
+                                    try:
+                                        # 最古老版本 SDK 的模型名稱
+                                        res = genai.GenerativeModel("gemini-pro").generate_content(prompt)
+                                        st.success(res.text)
+                                    except Exception as inner_e:
+                                        st.error(f"⚠ AI 模型呼叫失敗！請務必在 GitHub 的 requirements.txt 加上 `google-generativeai>=0.7.2` 以更新套件。詳細錯誤：{inner_e}")
                             except Exception as e:
                                 st.error(f"⚠ 系統錯誤，詳細原因：{e}")
 
@@ -440,10 +440,14 @@ with tab3:
                                 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
                                 prompt = f"目標股票【{display_title}】，現價 {curr_p}。季線 {key_prices['ma60']}，近期高點壓力 {key_prices['pressure']}，近期低點支撐 {key_prices['support']}，目前KD值(K:{key_prices['k_val']}, D:{key_prices['d_val']})，RSI為{key_prices['rsi_val']}。請根據以上技術數據，提供明確的進場區間、停損價、停利價。100字內，語氣果斷。"
                                 try:
-                                    res = genai.GenerativeModel("gemini-1.5-flash-latest").generate_content(prompt)
+                                    res = genai.GenerativeModel("gemini-1.5-flash").generate_content(prompt)
+                                    st.warning(res.text)
                                 except:
-                                    res = genai.GenerativeModel("gemini-1.0-pro").generate_content(prompt)
-                                st.warning(res.text)
+                                    try:
+                                        res = genai.GenerativeModel("gemini-pro").generate_content(prompt)
+                                        st.warning(res.text)
+                                    except Exception as inner_e:
+                                        st.error(f"⚠ AI 模型呼叫失敗！請務必在 GitHub 的 requirements.txt 加上 `google-generativeai>=0.7.2` 以更新套件。詳細錯誤：{inner_e}")
                             except Exception as e:
                                 st.error(f"⚠ 系統錯誤，詳細原因：{e}")
 
@@ -468,9 +472,13 @@ with tab3:
                             3. 🎯 **【戰情室綜合診斷】**：請根據上述硬數據與分數，告訴我這檔股票目前的「真實位階」，以及最終的操作定調。
                             """
                             try:
-                                res = genai.GenerativeModel("gemini-1.5-flash-latest").generate_content(master_prompt)
+                                res = genai.GenerativeModel("gemini-1.5-flash").generate_content(master_prompt)
+                                st.info(res.text)
                             except:
-                                res = genai.GenerativeModel("gemini-1.0-pro").generate_content(master_prompt)
-                            st.info(res.text)
+                                try:
+                                    res = genai.GenerativeModel("gemini-pro").generate_content(master_prompt)
+                                    st.info(res.text)
+                                except Exception as inner_e:
+                                    st.error(f"⚠ AI 模型呼叫失敗！請務必在 GitHub 的 requirements.txt 加上 `google-generativeai>=0.7.2` 以更新套件。詳細錯誤：{inner_e}")
                         except Exception as e:
                             st.error(f"⚠️ 系統錯誤，詳細原因：{e}")
