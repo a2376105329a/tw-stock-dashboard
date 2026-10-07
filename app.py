@@ -315,24 +315,11 @@ with tab3:
             st.markdown(f"## {display_title} ｜ 綜合總分：{score} 分 ({light})")
             st.info(f"🏢 產業板塊：{s_ind} ｜ 現價：${curr_p}")
             
-            # --- 🤖 終極解法：AI 自動尋敵與偵測函數 ---
-            def ask_gemini_autodetect(prompt_text):
+            # --- 🤖 終極解法：強制指定 Google 官方要求的最新 3.8 版引擎 ---
+            def get_gemini_response(prompt_text):
                 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-                
-                # 1. 直接問 Google：我這把鑰匙現在到底能用哪些模型？
-                available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-                
-                if not available_models:
-                    return "❌ 你的 API Key 完全沒有生成文字的權限！請至 Google AI Studio (aistudio.google.com) 免費申請一把全新的金鑰，然後替換掉 Streamlit 的 Secrets。"
-                
-                # 2. 自動挑選模型：優先找 1.5 版，找不到就直接拿清單上的第一個來用，絕對不寫死！
-                target_model = available_models[0]
-                for m in available_models:
-                    if "1.5-flash" in m:
-                        target_model = m
-                        break
-                
-                model = genai.GenerativeModel(target_model)
+                # 直接鎖定 Google 報錯中要求的最新 gemini-3.8-flash 模型
+                model = genai.GenerativeModel("gemini-3.8-flash")
                 res = model.generate_content(prompt_text)
                 return res.text
             
@@ -344,10 +331,10 @@ with tab3:
                 
                 if "GEMINI_API_KEY" in st.secrets:
                     if st.button("🤖 預估 2027 年 EPS", key="ai_eps"):
-                        with st.spinner("系統自動偵測可用 AI 引擎中..."):
+                        with st.spinner("啟動最新版 AI 引擎中..."):
                             try:
                                 prompt = f"現在時間是2026年10月，請以資深分析師角度，預估台股 {display_title} ({s_ind}) 2027年全年的 EPS 展望與營運動能，字數100字內。"
-                                st.success(ask_gemini_autodetect(prompt))
+                                st.success(get_gemini_response(prompt))
                             except Exception as e:
                                 st.error(f"⚠ API 內部錯誤，詳細原因：{e}")
 
@@ -364,10 +351,10 @@ with tab3:
                 
                 if "GEMINI_API_KEY" in st.secrets:
                     if st.button("🤖 制定停損利計畫", key="ai_tech"):
-                        with st.spinner("系統自動偵測可用 AI 引擎中..."):
+                        with st.spinner("啟動最新版 AI 引擎中..."):
                             try:
                                 prompt = f"目標股票【{display_title}】，現價 {curr_p}。季線 {key_prices['ma60']}，近期高點壓力 {key_prices['pressure']}，近期低點支撐 {key_prices['support']}，目前KD值(K:{key_prices['k_val']}, D:{key_prices['d_val']})，RSI為{key_prices['rsi_val']}。請根據以上技術數據，提供明確的進場區間、停損價、停利價。100字內，語氣果斷。"
-                                st.warning(ask_gemini_autodetect(prompt))
+                                st.warning(get_gemini_response(prompt))
                             except Exception as e:
                                 st.error(f"⚠ API 內部錯誤，詳細原因：{e}")
 
@@ -375,7 +362,7 @@ with tab3:
             if "GEMINI_API_KEY" in st.secrets:
                 st.markdown("### 👑 戰情室終極大腦")
                 if st.button("🚀 生成【公司業務 / 同業競品 / 實戰綜合總結】", use_container_width=True):
-                    with st.spinner("正在整合數據，並由自動分配的 AI 撰寫戰情報告..."):
+                    with st.spinner("正在整合數據，啟動最新版 AI 撰寫戰情報告..."):
                         try:
                             master_prompt = f"""
                             現在時間是2026年10月。你是一位頂尖的台股操盤手兼產業分析師。請針對【{display_title}】產出一份「終極戰情報告」。
@@ -390,6 +377,6 @@ with tab3:
                             2. 🏢 **【同業競品與關聯股】**：列出 3-5 檔同產業或具備相同題材的關聯股票，供替換觀察。
                             3. 🎯 **【戰情室綜合診斷】**：請根據上述硬數據與分數，告訴我這檔股票目前的「真實位階」，以及最終的操作定調。
                             """
-                            st.info(ask_gemini_autodetect(master_prompt))
+                            st.info(get_gemini_response(master_prompt))
                         except Exception as e:
                             st.error(f"⚠️ API 內部錯誤，詳細原因：{e}")
