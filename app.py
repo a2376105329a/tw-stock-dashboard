@@ -137,18 +137,16 @@ def detect_historical_breakout(df, idx):
 
 def detect_bottom_patterns(df): return detect_historical_breakout(df, -1)
 
-# --- 籌碼面引擎 (VIP 解鎖版) ---
+# --- 籌碼面引擎 (VIP 解鎖與中英防呆版) ---
 @st.cache_data(ttl=3600)
 def get_real_chip_data(symbol, current_price):
     s_trust, s_big, s_foreign = 4, 4, 2
     
-    # 修改 1：預設文字改為「無資料」，用來抓出 API 是否真的被擋
     desc_trust, desc_big, desc_foreign = "⚪ 投信無資料(API限流)", "⚪ 大戶無資料(API限流)", "⚪ 外資無資料(API限流)"
     
     end_date = datetime.now().strftime("%Y-%m-%d")
     start_date = (datetime.now() - timedelta(days=20)).strftime("%Y-%m-%d")
     
-    # 修改 2：綁定你的個人 VIP Token
     fm_token = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiYTIzNzYxMDUzMjlAZ21haWwuY29tIiwiZW1haWwiOiJhMjM3NjEwNTMyOUBnbWFpbC5jb20iLCJ0b2tlbl92ZXJzaW9uIjowfQ.Be8t5W62EWObgWAyQRPWaADooUkwY0gYWYGSZIJjT-s"
     
     try:
@@ -156,19 +154,20 @@ def get_real_chip_data(symbol, current_price):
         res_inst = requests.get(url_inst, timeout=5)
         
         if res_inst.status_code == 200:
-            # 只要連線成功，就把狀態還原成中性的黃燈 (代表資料有抓到，只是主力沒動作)
             desc_trust = "🟡 投信無連續佈局"
             desc_foreign = "🟡 外資無連續方向"
             
             df_inst = pd.DataFrame(res_inst.json().get("data", []))
             if not df_inst.empty:
-                df_trust = df_inst[df_inst['name'].str.contains("投信")].tail(10)
+                # 修正中英名稱防呆
+                df_trust = df_inst[df_inst['name'].str.contains("投信|Investment_Trust", case=False, na=False)].tail(10)
                 if not df_trust.empty:
                     df_trust['net'] = pd.to_numeric(df_trust['buy'], errors='coerce') - pd.to_numeric(df_trust['sell'], errors='coerce')
                     if df_trust['net'].sum() > 100: s_trust, desc_trust = 8, f"✅ 投信買超 ({int(df_trust['net'].sum())} 張)"
                     elif df_trust['net'].sum() < -100: s_trust, desc_trust = 0, f"🚨 投信倒貨 ({int(abs(df_trust['net'].sum()))} 張)"
                 
-                df_foreign = df_inst[df_inst['name'].str.contains("外資")].tail(5)
+                # 修正中英名稱防呆
+                df_foreign = df_inst[df_inst['name'].str.contains("外資|Foreign_Investor|Foreign_Dealer", case=False, na=False)].tail(5)
                 if not df_foreign.empty:
                     df_foreign['net'] = pd.to_numeric(df_foreign['buy'], errors='coerce') - pd.to_numeric(df_foreign['sell'], errors='coerce')
                     buy_days = len(df_foreign[df_foreign['net'] > 0])
@@ -178,7 +177,7 @@ def get_real_chip_data(symbol, current_price):
         url_share = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockShareholding&data_id={symbol}&start_date={start_date}&end_date={end_date}&token={fm_token}"
         res_share = requests.get(url_share, timeout=5)
         if res_share.status_code == 200:
-            desc_big = "🟡 千張大戶持股中性"  # 只要連線成功，就還原成中性
+            desc_big = "🟡 千張大戶持股中性"
             df_share = pd.DataFrame(res_share.json().get("data", []))
             col_name = 'HoldingSharesLevel' if 'HoldingSharesLevel' in df_share.columns else ('holding_shares_level' if 'holding_shares_level' in df_share.columns else None)
             if col_name:
