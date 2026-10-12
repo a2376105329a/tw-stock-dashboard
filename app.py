@@ -77,20 +77,6 @@ def get_tw_stock_meta():
 
 name_map, industry_map = get_tw_stock_meta()
 
-@st.cache_data(ttl=3600)
-def get_active_market_stocks():
-    url = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
-    try:
-        res = requests.get(url, timeout=10)
-        if res.status_code == 200:
-            df = pd.DataFrame(res.json()).rename(columns={'Code': 'id', 'Name': 'name', 'ClosingPrice': 'close', 'TradeVolume': 'volume'})
-            df = df[df['id'].str.len() == 4]
-            df['close'] = pd.to_numeric(df['close'].str.replace(',', ''), errors='coerce')
-            df['volume'] = pd.to_numeric(df['volume'].str.replace(',', ''), errors='coerce') / 1000
-            return df.dropna(subset=['close', 'volume'])
-    except: pass
-    return pd.DataFrame([{"id": "2330", "name": "台積電", "volume": 50000, "close": 1000}])
-
 @st.cache_data(ttl=86400)
 def get_fundamental_info(symbol):
     for suffix in [".TW", ".TWO"]:
@@ -225,75 +211,145 @@ def evaluate_single_stock(info, hist, symbol, s_ind):
 # ==================== UI 介面 ====================
 tab1, tab3 = st.tabs(["🛡️ 量縮回測洗盤雷達 (支撐買點)", "🔍 個股深度 AI 診斷"])
 
+# ==================== 分頁一：量縮回測洗盤雷達 ====================
 with tab1:
-    st.subheader("🛡️ 法人級策略：買在起漲後的量縮洗盤點")
-    st.caption("條件：昨日/今日緊貼均線支撐 ＋ 近期量縮降溫 ＋ 過去 3~10 天內曾爆量出現【七大底部起漲型態】。")
+    st.subheader("🛡️ 法人級嚴選：起漲後量縮回測支撐戰法")
+    st.caption("條件：完美通過流動性、量縮洗盤、季線/中軌防守、乖離率收斂、KD與RSI動能共振等 5 大嚴格濾網。")
     col_btn, col_opt = st.columns([1, 2])
     with col_btn:
-        run_scan = st.button("🚀 立即掃描低風險支撐股", use_container_width=True)
+        run_scan = st.button("🚀 立即全市場即時掃描", use_container_width=True)
     with col_opt:
-        min_vol_limit = st.slider("設定今日最低成交量門檻 (張)", min_value=500, max_value=5000, value=1500, step=500)
+        min_vol_limit = st.slider("設定今日最低成交量門檻 (張)", min_value=1500, max_value=5000, value=1500, step=500)
 
     if run_scan:
-        market_stocks = get_active_market_stocks()
-        filtered_stocks = market_stocks[market_stocks['volume'] >= min_vol_limit].sort_values(by="volume", ascending=False)
-        with st.spinner(f"正在分析全市場 {len(filtered_stocks)} 檔高流動性標的... (請耐心等候)"):
+        all_sids = [k for k in name_map.keys() if len(k) == 4 and k.isdigit()]
+        
+        with st.spinner(f"🚨 啟動全市場 {len(all_sids)} 檔標的深度掃描 (因逐檔抓取即時數據，約需 1~2 分鐘請稍候)..."):
             buy_signals = []
-            def quick_scan(row):
-                sid, sname = str(row['id']), name_map.get(str(row['id']), str(row.get('name', '')))
+            
+            def quick_scan(sid):
+                sname = name_map.get(sid, "")
                 sind = industry_map.get(sid, "其他板塊")
+                
                 hist = get_stock_history(sid)
+                
+                # --- 1. 基礎流動性門檻 (即時汰弱) ---
+                # 資料長度： 上市櫃滿 70 天以上
                 if hist.empty or len(hist) < 70: return None
+                
                 hist = calculate_indicators(hist)
-                close, open_p, low, vol = hist['Close'].astype(float), hist['Open'].astype(float), hist['Low'].astype(float), hist['Volume'].astype(float)
-                curr_price, vol_today = round(close.iloc[-1], 2), vol.iloc[-1]
-                vol_ma5, vol_ma20 = vol.rolling(5).mean().iloc[-1], vol.rolling(20).mean()
-                ma5, ma10, ma60, rsi = hist['MA5'], hist['MA10'], hist['MA60'], round(hist['RSI'].iloc[-1], 1)
+                close = hist['Close'].astype(float)
+                open_p = hist['Open'].astype(float)
+                low = hist['Low'].astype(float)
+                vol = hist['Volume'].astype(float)
                 
-                if vol_ma5 <= 1500 or vol_today >= vol_ma5 or curr_price <= ma60.iloc[-1] or ma60.iloc[-1] <= ma60.iloc[-2] or not (50 <= rsi <= 65): return None 
-                bias_ma5, bias_ma10 = (curr_price - ma5.iloc[-1]) / ma5.iloc[-1], (curr_price - ma10.iloc[-1]) / ma10.iloc[-1]
-                if not ((0 <= bias_ma5 <= 0.02) or (0 <= bias_ma10 <= 0.02)): return None
-                lower_shadow, real_body = min(curr_price, open_p.iloc[-1]) - low.iloc[-1], abs(curr_price - open_p.iloc[-1])
-                if not ((curr_price >= close.iloc[-2]) or (lower_shadow > real_body and lower_shadow > 0)): return None
+                curr_price = round(close.iloc[-1], 2)
+                vol_today = vol.iloc[-1]
                 
-                found_pattern, trigger_days_ago = "", 0
+                # 即時熱度： 今日真實成交量必須達標
+                if vol_today < min_vol_limit: return None
+                
+                vol_ma5 = vol.rolling(5).mean().iloc[-1]
+                vol_ma20_series = vol.rolling(20).mean()
+                vol_ma20_today = vol_ma20_series.iloc[-1]
+                
+                # --- 3. 量縮洗盤確認 (籌碼極致沉澱) ---
+                # 5日均量底線
+                if vol_ma5 <= 1500: return None
+                # 今日雙重量縮：必須小於 5MA，且小於 20MA 的 80%
+                if vol_today >= vol_ma5: return None
+                if vol_today >= vol_ma20_today * 0.8: return None
+                
+                ma5, ma10, ma20, ma60 = hist['MA5'], hist['MA10'], hist['MA20'], hist['MA60']
+                rsi = round(hist['RSI'].iloc[-1], 1)
+                k_today, d_today = hist['K'].iloc[-1], hist['D'].iloc[-1]
+                k_yest, d_yest = hist['K'].iloc[-2], hist['D'].iloc[-2]
+                
+                # --- 4. 結構與趨勢防守 (基本均線) ---
+                # 季線保護傘 (站上且持平/上揚)
+                if curr_price <= ma60.iloc[-1] or ma60.iloc[-1] < ma60.iloc[-2]: return None
+                # 布林軌道底線 (大於中軌 20MA)
+                if curr_price <= ma20.iloc[-1]: return None
+                
+                # 當日 K 線防守特徵 (不能長黑破底)
+                lower_shadow = min(curr_price, open_p.iloc[-1]) - low.iloc[-1]
+                real_body = abs(curr_price - open_p.iloc[-1])
+                is_defended = (curr_price >= close.iloc[-2]) or (lower_shadow > real_body and lower_shadow > 0)
+                if not is_defended: return None
+                
+                # --- 5. 雙指標共振 (動能不過熱與高檔擊發) ---
+                # RSI 動能位階 (50 到 70 之間)
+                if not (50 <= rsi <= 70): return None
+                # KD 高檔轉折 (K與D皆須大於50)
+                if k_today <= 50 or d_today <= 50: return None
+                # K 值正向 D 值靠攏，或今日產生黃金交叉
+                is_kd_turning = (k_today >= d_today) or ((k_today - d_today) > (k_yest - d_yest))
+                if not is_kd_turning: return None
+                
+                # --- 2. 主力發動軌跡與底部型態 ---
+                found_pattern, trigger_days_ago, neckline = "", 0, 0
                 for i in range(-10, -2): 
-                    if vol.iloc[i] > vol_ma20.iloc[i] * 2 and close.iloc[i] > open_p.iloc[i]:
+                    # 爆量發動：大於月均量2倍，且為實體紅K (收盤>開盤)
+                    if vol.iloc[i] > vol_ma20_series.iloc[i] * 2 and close.iloc[i] > open_p.iloc[i]:
                         pat = detect_historical_breakout(hist, i)
-                        if pat: found_pattern, trigger_days_ago = pat, abs(i) - 1; break
+                        if pat: 
+                            found_pattern = pat
+                            trigger_days_ago = abs(i) - 1
+                            neckline = close.iloc[i] # 關鍵連動：定義第一層結構頸線為收盤價
+                            break
                             
-                if found_pattern:
-                    return {"代號": sid, "名稱": sname, "產業": sind, "現價": curr_price, "歷史發動點": f"{trigger_days_ago} 天前", "主力起漲型態": found_pattern, "建議停損": round(min(ma5.iloc[-1], ma10.iloc[-1]), 2), "目標停利": round(hist['High'].iloc[-60:].max() * 1.1, 2), "RSI指標": rsi}
-                return None
+                if not found_pattern: return None
+                
+                # --- 4. 結構與趨勢防守 (精準回測乖離率) ---
+                # 距離 10 日均線或第一層結構頸線，正負乖離率落在 0% 到 4% 之間
+                bias_ma10 = abs((curr_price - ma10.iloc[-1]) / ma10.iloc[-1])
+                bias_neck = abs((curr_price - neckline) / neckline) if neckline > 0 else 999
+                
+                if not (bias_ma10 <= 0.04 or bias_neck <= 0.04): return None
+                
+                return {
+                    "代號": sid, 
+                    "名稱": sname, 
+                    "產業": sind, 
+                    "現價": curr_price, 
+                    "歷史發動點": f"{trigger_days_ago} 天前", 
+                    "主力起漲型態": found_pattern, 
+                    "建議停損": round(min(ma5.iloc[-1], ma10.iloc[-1]), 2), 
+                    "目標停利": round(hist['High'].iloc[-60:].max() * 1.1, 2), 
+                    "RSI指標": rsi
+                }
 
             progress_bar, status_text = st.progress(0), st.empty()
-            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-                futures = {executor.submit(quick_scan, row): row for _, row in filtered_stocks.iterrows()}
+            
+            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+                futures = {executor.submit(quick_scan, sid): sid for sid in all_sids}
                 completed = 0
                 for f in concurrent.futures.as_completed(futures):
                     completed += 1
-                    status_text.text(f"🔍 正在尋找量縮回測洗盤買點... (進度: {completed} / {len(filtered_stocks)})")
-                    progress_bar.progress(completed / len(filtered_stocks))
-                    if f.result(): buy_signals.append(f.result())
+                    status_text.text(f"🔍 全市場嚴格濾網過濾中... (進度: {completed} / {len(all_sids)})")
+                    progress_bar.progress(completed / len(all_sids))
+                    res = f.result()
+                    if res: buy_signals.append(res)
+            
             status_text.empty(); progress_bar.empty()
             
             if buy_signals:
                 df_result = pd.DataFrame(buy_signals)
-                st.success(f"🎯 掃描完成！目前市場上有 {len(df_result)} 檔標的符合【起漲後量縮回測支撐】之低風險買點：")
+                st.success(f"🎯 掃描完成！全市場 1,800 檔中，極度嚴選出 {len(df_result)} 檔符合【右側交易精準洗盤買點】：")
                 top_cols = st.columns(min(len(df_result), 3))
                 for i in range(min(len(df_result), 3)):
                     item = df_result.iloc[i]
                     with top_cols[i]:
                         st.markdown(f"#### 🏆 No.{i+1} {item['代號']} {item['名稱']}")
-                        st.info(f"**回測洗盤點確認 (RSI: {item['RSI指標']})**")
+                        st.info(f"**完美回測 (RSI: {item['RSI指標']})**")
                         st.write(f"🏢 產業：{item['產業']} ｜ 💰 現價：**${item['現價']}**")
                         st.write(f"🔥 主力軌跡：{item['歷史發動點']} 觸發【{item['主力起漲型態']}】")
-                        st.write(f"🎯 目標價：${item['目標停利']} ｜ 🚨 防守極限：${item['建議停損']}")
+                        st.write(f"🎯 目標價：${item['目標停利']} ｜ 🚨 破線停損：${item['建議停損']}")
                 st.markdown("---")
                 st.markdown("### 📋 完整符合清單")
                 st.dataframe(df_result, use_container_width=True)
             else:
-                st.warning("目前盤面暫無完美符合個股，建議保留資金耐心等候洗盤結束。")
+                st.warning("目前盤面暫無任何一檔股票能同時完美通過這 5 大嚴格濾網，建議保留資金耐心等候！")
 
 # ==================== 分頁三：個股深度診斷 ====================
 with tab3:
@@ -314,16 +370,12 @@ with tab3:
             st.markdown(f"## {display_title} ｜ 綜合總分：{score} 分 ({light})")
             st.info(f"🏢 產業板塊：{s_ind} ｜ 現價：${curr_p}")
             
-            # --- 🤖 終極直連脫困解法：完全擺脫套件，延長至 60 秒 ---
             def get_gemini_response_direct(prompt_text):
                 api_key = st.secrets.get("GEMINI_API_KEY")
                 if not api_key: return "❌ 找不到 API Key，請檢查 Streamlit Secrets 設定。"
-                
-                # 直接使用 Google 要求的 3.8-flash 模型，並將 timeout 延長至 60 秒
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={api_key}"
                 headers = {'Content-Type': 'application/json'}
                 payload = {"contents": [{"parts": [{"text": prompt_text}]}]}
-                
                 try:
                     res = requests.post(url, headers=headers, json=payload, timeout=60)
                     if res.status_code == 200:
