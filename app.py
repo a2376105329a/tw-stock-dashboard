@@ -137,15 +137,29 @@ def detect_historical_breakout(df, idx):
 
 def detect_bottom_patterns(df): return detect_historical_breakout(df, -1)
 
+# --- 籌碼面引擎 (VIP 解鎖版) ---
 @st.cache_data(ttl=3600)
 def get_real_chip_data(symbol, current_price):
     s_trust, s_big, s_foreign = 4, 4, 2
-    desc_trust, desc_big, desc_foreign = "🟡 投信無連續佈局", "🟡 千張大戶持股中性", "🟡 外資無連續方向"
+    
+    # 修改 1：預設文字改為「無資料」，用來抓出 API 是否真的被擋
+    desc_trust, desc_big, desc_foreign = "⚪ 投信無資料(API限流)", "⚪ 大戶無資料(API限流)", "⚪ 外資無資料(API限流)"
+    
     end_date = datetime.now().strftime("%Y-%m-%d")
     start_date = (datetime.now() - timedelta(days=20)).strftime("%Y-%m-%d")
+    
+    # 修改 2：綁定你的個人 VIP Token
+    fm_token = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiYTIzNzYxMDUzMjlAZ21haWwuY29tIiwiZW1haWwiOiJhMjM3NjEwNTMyOUBnbWFpbC5jb20iLCJ0b2tlbl92ZXJzaW9uIjowfQ.Be8t5W62EWObgWAyQRPWaADooUkwY0gYWYGSZIJjT-s"
+    
     try:
-        res_inst = requests.get(f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockInstitutionalInvestorsBuySell&data_id={symbol}&start_date={start_date}&end_date={end_date}", timeout=5)
+        url_inst = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockInstitutionalInvestorsBuySell&data_id={symbol}&start_date={start_date}&end_date={end_date}&token={fm_token}"
+        res_inst = requests.get(url_inst, timeout=5)
+        
         if res_inst.status_code == 200:
+            # 只要連線成功，就把狀態還原成中性的黃燈 (代表資料有抓到，只是主力沒動作)
+            desc_trust = "🟡 投信無連續佈局"
+            desc_foreign = "🟡 外資無連續方向"
+            
             df_inst = pd.DataFrame(res_inst.json().get("data", []))
             if not df_inst.empty:
                 df_trust = df_inst[df_inst['name'].str.contains("投信")].tail(10)
@@ -153,6 +167,7 @@ def get_real_chip_data(symbol, current_price):
                     df_trust['net'] = pd.to_numeric(df_trust['buy'], errors='coerce') - pd.to_numeric(df_trust['sell'], errors='coerce')
                     if df_trust['net'].sum() > 100: s_trust, desc_trust = 8, f"✅ 投信買超 ({int(df_trust['net'].sum())} 張)"
                     elif df_trust['net'].sum() < -100: s_trust, desc_trust = 0, f"🚨 投信倒貨 ({int(abs(df_trust['net'].sum()))} 張)"
+                
                 df_foreign = df_inst[df_inst['name'].str.contains("外資")].tail(5)
                 if not df_foreign.empty:
                     df_foreign['net'] = pd.to_numeric(df_foreign['buy'], errors='coerce') - pd.to_numeric(df_foreign['sell'], errors='coerce')
@@ -160,8 +175,10 @@ def get_real_chip_data(symbol, current_price):
                     if buy_days >= 3: s_foreign, desc_foreign = 4, f"✅ 外資近 5 日出現 {buy_days} 日買超"
                     elif buy_days == 0: s_foreign, desc_foreign = 0, "🚨 外資連續倒貨"
 
-        res_share = requests.get(f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockShareholding&data_id={symbol}&start_date={start_date}&end_date={end_date}", timeout=5)
+        url_share = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockShareholding&data_id={symbol}&start_date={start_date}&end_date={end_date}&token={fm_token}"
+        res_share = requests.get(url_share, timeout=5)
         if res_share.status_code == 200:
+            desc_big = "🟡 千張大戶持股中性"  # 只要連線成功，就還原成中性
             df_share = pd.DataFrame(res_share.json().get("data", []))
             col_name = 'HoldingSharesLevel' if 'HoldingSharesLevel' in df_share.columns else ('holding_shares_level' if 'holding_shares_level' in df_share.columns else None)
             if col_name:
@@ -234,7 +251,6 @@ with tab1:
                 hist = get_stock_history(sid)
                 
                 # --- 1. 基礎流動性門檻 (即時汰弱) ---
-                # 資料長度： 上市櫃滿 70 天以上
                 if hist.empty or len(hist) < 70: return None
                 
                 hist = calculate_indicators(hist)
@@ -246,17 +262,15 @@ with tab1:
                 curr_price = round(close.iloc[-1], 2)
                 vol_today = vol.iloc[-1]
                 
-                # 即時熱度： 今日真實成交量必須達標
+                # 即時熱度
                 if vol_today < min_vol_limit: return None
                 
                 vol_ma5 = vol.rolling(5).mean().iloc[-1]
                 vol_ma20_series = vol.rolling(20).mean()
                 vol_ma20_today = vol_ma20_series.iloc[-1]
                 
-                # --- 3. 量縮洗盤確認 (籌碼極致沉澱) ---
-                # 5日均量底線
+                # --- 3. 量縮洗盤確認 ---
                 if vol_ma5 <= 1500: return None
-                # 今日雙重量縮：必須小於 5MA，且小於 20MA 的 80%
                 if vol_today >= vol_ma5: return None
                 if vol_today >= vol_ma20_today * 0.8: return None
                 
@@ -265,43 +279,35 @@ with tab1:
                 k_today, d_today = hist['K'].iloc[-1], hist['D'].iloc[-1]
                 k_yest, d_yest = hist['K'].iloc[-2], hist['D'].iloc[-2]
                 
-                # --- 4. 結構與趨勢防守 (基本均線) ---
-                # 季線保護傘 (站上且持平/上揚)
+                # --- 4. 結構與趨勢防守 ---
                 if curr_price <= ma60.iloc[-1] or ma60.iloc[-1] < ma60.iloc[-2]: return None
-                # 布林軌道底線 (大於中軌 20MA)
                 if curr_price <= ma20.iloc[-1]: return None
                 
-                # 當日 K 線防守特徵 (不能長黑破底)
                 lower_shadow = min(curr_price, open_p.iloc[-1]) - low.iloc[-1]
                 real_body = abs(curr_price - open_p.iloc[-1])
                 is_defended = (curr_price >= close.iloc[-2]) or (lower_shadow > real_body and lower_shadow > 0)
                 if not is_defended: return None
                 
-                # --- 5. 雙指標共振 (動能不過熱與高檔擊發) ---
-                # RSI 動能位階 (50 到 70 之間)
+                # --- 5. 雙指標共振 ---
                 if not (50 <= rsi <= 70): return None
-                # KD 高檔轉折 (K與D皆須大於50)
                 if k_today <= 50 or d_today <= 50: return None
-                # K 值正向 D 值靠攏，或今日產生黃金交叉
                 is_kd_turning = (k_today >= d_today) or ((k_today - d_today) > (k_yest - d_yest))
                 if not is_kd_turning: return None
                 
                 # --- 2. 主力發動軌跡與底部型態 ---
                 found_pattern, trigger_days_ago, neckline = "", 0, 0
                 for i in range(-10, -2): 
-                    # 爆量發動：大於月均量2倍，且為實體紅K (收盤>開盤)
                     if vol.iloc[i] > vol_ma20_series.iloc[i] * 2 and close.iloc[i] > open_p.iloc[i]:
                         pat = detect_historical_breakout(hist, i)
                         if pat: 
                             found_pattern = pat
                             trigger_days_ago = abs(i) - 1
-                            neckline = close.iloc[i] # 關鍵連動：定義第一層結構頸線為收盤價
+                            neckline = close.iloc[i] 
                             break
                             
                 if not found_pattern: return None
                 
-                # --- 4. 結構與趨勢防守 (精準回測乖離率) ---
-                # 距離 10 日均線或第一層結構頸線，正負乖離率落在 0% 到 4% 之間
+                # 精準回測乖離率
                 bias_ma10 = abs((curr_price - ma10.iloc[-1]) / ma10.iloc[-1])
                 bias_neck = abs((curr_price - neckline) / neckline) if neckline > 0 else 999
                 
