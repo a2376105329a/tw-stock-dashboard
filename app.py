@@ -77,6 +77,20 @@ def get_tw_stock_meta():
 
 name_map, industry_map = get_tw_stock_meta()
 
+@st.cache_data(ttl=3600)
+def get_active_market_stocks():
+    url = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
+    try:
+        res = requests.get(url, timeout=10)
+        if res.status_code == 200:
+            df = pd.DataFrame(res.json()).rename(columns={'Code': 'id', 'Name': 'name', 'ClosingPrice': 'close', 'TradeVolume': 'volume'})
+            df = df[df['id'].str.len() == 4]
+            df['close'] = pd.to_numeric(df['close'].str.replace(',', ''), errors='coerce')
+            df['volume'] = pd.to_numeric(df['volume'].str.replace(',', ''), errors='coerce') / 1000
+            return df.dropna(subset=['close', 'volume'])
+    except: pass
+    return pd.DataFrame([{"id": "2330", "name": "台積電", "volume": 50000, "close": 1000}])
+
 @st.cache_data(ttl=86400)
 def get_fundamental_info(symbol):
     for suffix in [".TW", ".TWO"]:
@@ -141,9 +155,7 @@ def detect_bottom_patterns(df): return detect_historical_breakout(df, -1)
 @st.cache_data(ttl=3600)
 def get_real_chip_data(symbol, current_price):
     s_trust, s_big, s_foreign = 4, 4, 2
-    
     desc_trust, desc_big, desc_foreign = "⚪ 投信無資料(API限流)", "⚪ 大戶無資料(API限流)", "⚪ 外資無資料(API限流)"
-    
     end_date = datetime.now().strftime("%Y-%m-%d")
     start_date = (datetime.now() - timedelta(days=20)).strftime("%Y-%m-%d")
     
@@ -159,14 +171,12 @@ def get_real_chip_data(symbol, current_price):
             
             df_inst = pd.DataFrame(res_inst.json().get("data", []))
             if not df_inst.empty:
-                # 修正中英名稱防呆
                 df_trust = df_inst[df_inst['name'].str.contains("投信|Investment_Trust", case=False, na=False)].tail(10)
                 if not df_trust.empty:
                     df_trust['net'] = pd.to_numeric(df_trust['buy'], errors='coerce') - pd.to_numeric(df_trust['sell'], errors='coerce')
                     if df_trust['net'].sum() > 100: s_trust, desc_trust = 8, f"✅ 投信買超 ({int(df_trust['net'].sum())} 張)"
                     elif df_trust['net'].sum() < -100: s_trust, desc_trust = 0, f"🚨 投信倒貨 ({int(abs(df_trust['net'].sum()))} 張)"
                 
-                # 修正中英名稱防呆
                 df_foreign = df_inst[df_inst['name'].str.contains("外資|Foreign_Investor|Foreign_Dealer", case=False, na=False)].tail(5)
                 if not df_foreign.empty:
                     df_foreign['net'] = pd.to_numeric(df_foreign['buy'], errors='coerce') - pd.to_numeric(df_foreign['sell'], errors='coerce')
@@ -191,7 +201,10 @@ def get_real_chip_data(symbol, current_price):
 
 def evaluate_single_stock(info, hist, symbol, s_ind):
     curr_p, ma60 = round(hist['Close'].iloc[-1], 2), round(hist['MA60'].iloc[-1], 2)
-    vol_today, vol_ma20 = hist['Volume'].iloc[-1], hist['Volume'].rolling(20).mean().iloc[-1]
+    # 將 Yahoo Finance 抓來的個股深度分析成交量也除以 1000 換算成「張」
+    vol_today = hist['Volume'].iloc[-1] / 1000
+    vol_ma20 = (hist['Volume'].rolling(20).mean().iloc[-1]) / 1000
+    
     bias60 = round(((curr_p - ma60) / ma60) * 100, 2)
     s_ma60, desc_ma60 = (10, f"✅ 站上季線且乖離僅 {bias60}%") if 0 <= bias60 <= 10.0 else ((5, f"🟡 站上季線但乖離達 {bias60}%") if bias60 > 10.0 else (0, f"❌ 跌破季線 (乖離 {bias60}%)"))
     bb_up, bb_width = hist['BB_UP'].iloc[-1], hist['BB_WIDTH'].iloc[-1]
@@ -224,137 +237,172 @@ def evaluate_single_stock(info, hist, symbol, s_ind):
     key_prices = {"pressure": round(hist['High'].iloc[-60:].max(), 2), "support": round(hist['Low'].iloc[-30:].min(), 2), "ma60": ma60, "k_val": k_val, "d_val": d_val, "rsi_val": rsi_val}
     return total_score, light, {"Fund": (final_fund_score, fund_details), "Chip": (s_chip_total, chip_details), "Tech": (tech_total, tech_details)}, key_prices, curr_p
 
-# ==================== UI 介面 ====================
-tab1, tab3 = st.tabs(["🛡️ 量縮回測洗盤雷達 (支撐買點)", "🔍 個股深度 AI 診斷"])
+# ==================== UI 介面設定 ====================
+tab1, tab2, tab3 = st.tabs(["🛡️ 嚴選：無死角全市場掃描 (新版)", "⏳ 初階：量縮回測洗盤雷達 (舊版)", "🔍 個股深度 AI 診斷"])
 
-# ==================== 分頁一：量縮回測洗盤雷達 ====================
+# ==================== 分頁一：嚴選全市場掃描 (新版) ====================
 with tab1:
     st.subheader("🛡️ 法人級嚴選：起漲後量縮回測支撐戰法")
-    st.caption("條件：完美通過流動性、量縮洗盤、季線/中軌防守、乖離率收斂、KD與RSI動能共振等 5 大嚴格濾網。")
+    st.caption("條件：無死角掃描全台股 1800 檔。完美通過雙重量縮、頸線/均線精準回測、KD與RSI動能共振等極度嚴格濾網。")
     col_btn, col_opt = st.columns([1, 2])
     with col_btn:
-        run_scan = st.button("🚀 立即全市場即時掃描", use_container_width=True)
+        run_scan_strict = st.button("🚀 啟動無死角全市場掃描 (約 1~2 分鐘)", use_container_width=True)
     with col_opt:
-        min_vol_limit = st.slider("設定今日最低成交量門檻 (張)", min_value=1500, max_value=5000, value=1500, step=500)
+        min_vol_limit_strict = st.slider("設定今日最低成交量門檻 (張) - 新版", min_value=1500, max_value=5000, value=1500, step=500)
 
-    if run_scan:
+    if run_scan_strict:
         all_sids = [k for k in name_map.keys() if len(k) == 4 and k.isdigit()]
         
-        with st.spinner(f"🚨 啟動全市場 {len(all_sids)} 檔標的深度掃描 (因逐檔抓取即時數據，約需 1~2 分鐘請稍候)..."):
-            buy_signals = []
+        with st.spinner(f"🚨 啟動全市場 {len(all_sids)} 檔標的深度掃描..."):
+            buy_signals_strict = []
             
-            def quick_scan(sid):
+            def quick_scan_strict(sid):
                 sname = name_map.get(sid, "")
                 sind = industry_map.get(sid, "其他板塊")
-                
                 hist = get_stock_history(sid)
                 
-                # --- 1. 基礎流動性門檻 (即時汰弱) ---
                 if hist.empty or len(hist) < 70: return None
-                
                 hist = calculate_indicators(hist)
-                close = hist['Close'].astype(float)
-                open_p = hist['Open'].astype(float)
-                low = hist['Low'].astype(float)
-                vol = hist['Volume'].astype(float)
                 
-                curr_price = round(close.iloc[-1], 2)
-                vol_today = vol.iloc[-1]
+                # 🔴 核心修正：將 Yahoo Finance 的成交量「股」除以 1000 換算成「張」
+                close, open_p, low = hist['Close'].astype(float), hist['Open'].astype(float), hist['Low'].astype(float)
+                vol = hist['Volume'].astype(float) / 1000
                 
-                # 即時熱度
-                if vol_today < min_vol_limit: return None
+                curr_price, vol_today = round(close.iloc[-1], 2), vol.iloc[-1]
+                
+                # 這樣才能跟 slider 上的 1500 張正常比較！
+                if vol_today < min_vol_limit_strict: return None
                 
                 vol_ma5 = vol.rolling(5).mean().iloc[-1]
                 vol_ma20_series = vol.rolling(20).mean()
                 vol_ma20_today = vol_ma20_series.iloc[-1]
                 
-                # --- 3. 量縮洗盤確認 ---
-                if vol_ma5 <= 1500: return None
-                if vol_today >= vol_ma5: return None
-                if vol_today >= vol_ma20_today * 0.8: return None
+                # 雙重量縮：必須低於 5MA，且低於 20MA 的 80%
+                if vol_ma5 <= 1500 or vol_today >= vol_ma5 or vol_today >= vol_ma20_today * 0.8: return None
                 
                 ma5, ma10, ma20, ma60 = hist['MA5'], hist['MA10'], hist['MA20'], hist['MA60']
                 rsi = round(hist['RSI'].iloc[-1], 1)
-                k_today, d_today = hist['K'].iloc[-1], hist['D'].iloc[-1]
-                k_yest, d_yest = hist['K'].iloc[-2], hist['D'].iloc[-2]
+                k_today, d_today, k_yest, d_yest = hist['K'].iloc[-1], hist['D'].iloc[-1], hist['K'].iloc[-2], hist['D'].iloc[-2]
                 
-                # --- 4. 結構與趨勢防守 ---
-                if curr_price <= ma60.iloc[-1] or ma60.iloc[-1] < ma60.iloc[-2]: return None
-                if curr_price <= ma20.iloc[-1]: return None
+                if curr_price <= ma60.iloc[-1] or ma60.iloc[-1] < ma60.iloc[-2] or curr_price <= ma20.iloc[-1]: return None
                 
-                lower_shadow = min(curr_price, open_p.iloc[-1]) - low.iloc[-1]
-                real_body = abs(curr_price - open_p.iloc[-1])
+                lower_shadow, real_body = min(curr_price, open_p.iloc[-1]) - low.iloc[-1], abs(curr_price - open_p.iloc[-1])
                 is_defended = (curr_price >= close.iloc[-2]) or (lower_shadow > real_body and lower_shadow > 0)
                 if not is_defended: return None
                 
-                # --- 5. 雙指標共振 ---
-                if not (50 <= rsi <= 70): return None
-                if k_today <= 50 or d_today <= 50: return None
+                if not (50 <= rsi <= 70) or k_today <= 50 or d_today <= 50: return None
                 is_kd_turning = (k_today >= d_today) or ((k_today - d_today) > (k_yest - d_yest))
                 if not is_kd_turning: return None
                 
-                # --- 2. 主力發動軌跡與底部型態 ---
                 found_pattern, trigger_days_ago, neckline = "", 0, 0
                 for i in range(-10, -2): 
                     if vol.iloc[i] > vol_ma20_series.iloc[i] * 2 and close.iloc[i] > open_p.iloc[i]:
                         pat = detect_historical_breakout(hist, i)
                         if pat: 
-                            found_pattern = pat
-                            trigger_days_ago = abs(i) - 1
-                            neckline = close.iloc[i] 
+                            found_pattern, trigger_days_ago, neckline = pat, abs(i) - 1, close.iloc[i] 
                             break
                             
                 if not found_pattern: return None
                 
-                # 精準回測乖離率
                 bias_ma10 = abs((curr_price - ma10.iloc[-1]) / ma10.iloc[-1])
                 bias_neck = abs((curr_price - neckline) / neckline) if neckline > 0 else 999
-                
                 if not (bias_ma10 <= 0.04 or bias_neck <= 0.04): return None
                 
-                return {
-                    "代號": sid, 
-                    "名稱": sname, 
-                    "產業": sind, 
-                    "現價": curr_price, 
-                    "歷史發動點": f"{trigger_days_ago} 天前", 
-                    "主力起漲型態": found_pattern, 
-                    "建議停損": round(min(ma5.iloc[-1], ma10.iloc[-1]), 2), 
-                    "目標停利": round(hist['High'].iloc[-60:].max() * 1.1, 2), 
-                    "RSI指標": rsi
-                }
+                return {"代號": sid, "名稱": sname, "產業": sind, "現價": curr_price, "歷史發動點": f"{trigger_days_ago} 天前", "主力起漲型態": found_pattern, "建議停損": round(min(ma5.iloc[-1], ma10.iloc[-1]), 2), "目標停利": round(hist['High'].iloc[-60:].max() * 1.1, 2), "RSI指標": rsi}
 
-            progress_bar, status_text = st.progress(0), st.empty()
+            progress_bar1, status_text1 = st.progress(0), st.empty()
             
             with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-                futures = {executor.submit(quick_scan, sid): sid for sid in all_sids}
+                futures = {executor.submit(quick_scan_strict, sid): sid for sid in all_sids}
                 completed = 0
                 for f in concurrent.futures.as_completed(futures):
                     completed += 1
-                    status_text.text(f"🔍 全市場嚴格濾網過濾中... (進度: {completed} / {len(all_sids)})")
-                    progress_bar.progress(completed / len(all_sids))
+                    status_text1.text(f"🔍 全市場嚴格濾網過濾中... (進度: {completed} / {len(all_sids)})")
+                    progress_bar1.progress(completed / len(all_sids))
                     res = f.result()
-                    if res: buy_signals.append(res)
+                    if res: buy_signals_strict.append(res)
             
-            status_text.empty(); progress_bar.empty()
+            status_text1.empty(); progress_bar1.empty()
             
-            if buy_signals:
-                df_result = pd.DataFrame(buy_signals)
-                st.success(f"🎯 掃描完成！全市場 1,800 檔中，極度嚴選出 {len(df_result)} 檔符合【右側交易精準洗盤買點】：")
-                top_cols = st.columns(min(len(df_result), 3))
-                for i in range(min(len(df_result), 3)):
-                    item = df_result.iloc[i]
-                    with top_cols[i]:
-                        st.markdown(f"#### 🏆 No.{i+1} {item['代號']} {item['名稱']}")
-                        st.info(f"**完美回測 (RSI: {item['RSI指標']})**")
-                        st.write(f"🏢 產業：{item['產業']} ｜ 💰 現價：**${item['現價']}**")
-                        st.write(f"🔥 主力軌跡：{item['歷史發動點']} 觸發【{item['主力起漲型態']}】")
-                        st.write(f"🎯 目標價：${item['目標停利']} ｜ 🚨 破線停損：${item['建議停損']}")
-                st.markdown("---")
-                st.markdown("### 📋 完整符合清單")
+            if buy_signals_strict:
+                df_result = pd.DataFrame(buy_signals_strict)
+                st.success(f"🎯 掃描完成！極度嚴選出 {len(df_result)} 檔符合【右側交易精準洗盤買點】：")
                 st.dataframe(df_result, use_container_width=True)
             else:
                 st.warning("目前盤面暫無任何一檔股票能同時完美通過這 5 大嚴格濾網，建議保留資金耐心等候！")
+
+
+# ==================== 分頁二：初階快篩雷達 (舊版) ====================
+with tab2:
+    st.subheader("⏳ 初階快篩：量縮回測洗盤雷達 (依賴證交所初篩)")
+    st.caption("條件：使用政府資料庫先篩出流動性標的 (可能有延遲死角)，再透過基礎的 5日均線量縮與 0~2% 乖離率過濾。")
+    col_btn2, col_opt2 = st.columns([1, 2])
+    with col_btn2:
+        run_scan_basic = st.button("🚀 啟動初階快篩雷達 (速度較快)", use_container_width=True)
+    with col_opt2:
+        min_vol_limit_basic = st.slider("設定今日最低成交量門檻 (張) - 舊版", min_value=500, max_value=5000, value=1500, step=500)
+
+    if run_scan_basic:
+        market_stocks = get_active_market_stocks()
+        filtered_stocks = market_stocks[market_stocks['volume'] >= min_vol_limit_basic].sort_values(by="volume", ascending=False)
+        
+        with st.spinner(f"正在分析名單上 {len(filtered_stocks)} 檔標的... (請耐心等候)"):
+            buy_signals_basic = []
+            
+            def quick_scan_basic(row):
+                sid, sname = str(row['id']), name_map.get(str(row['id']), str(row.get('name', '')))
+                sind = industry_map.get(sid, "其他板塊")
+                hist = get_stock_history(sid)
+                
+                if hist.empty or len(hist) < 70: return None
+                hist = calculate_indicators(hist)
+                
+                # 🔴 核心修正：將 Yahoo Finance 的成交量「股」除以 1000 換算成「張」
+                close, open_p, low = hist['Close'].astype(float), hist['Open'].astype(float), hist['Low'].astype(float)
+                vol = hist['Volume'].astype(float) / 1000
+                
+                curr_price, vol_today = round(close.iloc[-1], 2), vol.iloc[-1]
+                vol_ma5, vol_ma20 = vol.rolling(5).mean().iloc[-1], vol.rolling(20).mean()
+                ma5, ma10, ma60, rsi = hist['MA5'], hist['MA10'], hist['MA60'], round(hist['RSI'].iloc[-1], 1)
+                
+                # 舊版條件
+                if vol_ma5 <= 1500 or vol_today >= vol_ma5 or curr_price <= ma60.iloc[-1] or ma60.iloc[-1] <= ma60.iloc[-2] or not (50 <= rsi <= 65): return None 
+                
+                bias_ma5, bias_ma10 = (curr_price - ma5.iloc[-1]) / ma5.iloc[-1], (curr_price - ma10.iloc[-1]) / ma10.iloc[-1]
+                if not ((0 <= bias_ma5 <= 0.02) or (0 <= bias_ma10 <= 0.02)): return None
+                
+                lower_shadow, real_body = min(curr_price, open_p.iloc[-1]) - low.iloc[-1], abs(curr_price - open_p.iloc[-1])
+                if not ((curr_price >= close.iloc[-2]) or (lower_shadow > real_body and lower_shadow > 0)): return None
+                
+                found_pattern, trigger_days_ago = "", 0
+                for i in range(-10, -2): 
+                    if vol.iloc[i] > vol_ma20.iloc[i] * 2 and close.iloc[i] > open_p.iloc[i]:
+                        pat = detect_historical_breakout(hist, i)
+                        if pat: found_pattern, trigger_days_ago = pat, abs(i) - 1; break
+                            
+                if found_pattern:
+                    return {"代號": sid, "名稱": sname, "產業": sind, "現價": curr_price, "歷史發動點": f"{trigger_days_ago} 天前", "主力起漲型態": found_pattern, "建議停損": round(min(ma5.iloc[-1], ma10.iloc[-1]), 2), "目標停利": round(hist['High'].iloc[-60:].max() * 1.1, 2), "RSI指標": rsi}
+                return None
+
+            progress_bar2, status_text2 = st.progress(0), st.empty()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+                futures = {executor.submit(quick_scan_basic, row): row for _, row in filtered_stocks.iterrows()}
+                completed = 0
+                for f in concurrent.futures.as_completed(futures):
+                    completed += 1
+                    status_text2.text(f"🔍 初階量縮快篩中... (進度: {completed} / {len(filtered_stocks)})")
+                    progress_bar2.progress(completed / len(filtered_stocks))
+                    res = f.result()
+                    if res: buy_signals_basic.append(res)
+            
+            status_text2.empty(); progress_bar2.empty()
+            
+            if buy_signals_basic:
+                df_result = pd.DataFrame(buy_signals_basic)
+                st.success(f"🎯 掃描完成！共挑選出 {len(df_result)} 檔標的：")
+                st.dataframe(df_result, use_container_width=True)
+            else:
+                st.warning("目前盤面暫無符合個股。")
 
 # ==================== 分頁三：個股深度診斷 ====================
 with tab3:
