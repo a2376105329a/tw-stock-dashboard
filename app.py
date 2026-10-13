@@ -246,7 +246,7 @@ with tab1:
     st.caption("條件：無死角掃描全台股 1800 檔。完美通過雙重量縮、頸線/均線精準回測、KD與RSI動能共振等極度嚴格濾網。")
     col_btn, col_opt = st.columns([1, 2])
     with col_btn:
-        run_scan_strict = st.button("🚀 啟動無死角全市場掃描 (約 1~2 分鐘)", use_container_width=True)
+        run_scan_strict = st.button("🚀 啟動無死角全市場掃描", use_container_width=True)
     with col_opt:
         min_vol_limit_strict = st.slider("設定今日最低成交量門檻 (張) - 新版", min_value=1500, max_value=5000, value=1500, step=500)
 
@@ -270,14 +270,12 @@ with tab1:
                 
                 curr_price, vol_today = round(close.iloc[-1], 2), vol.iloc[-1]
                 
-                # 這樣才能跟 slider 上的 1500 張正常比較！
                 if vol_today < min_vol_limit_strict: return None
                 
                 vol_ma5 = vol.rolling(5).mean().iloc[-1]
                 vol_ma20_series = vol.rolling(20).mean()
                 vol_ma20_today = vol_ma20_series.iloc[-1]
                 
-                # 雙重量縮：必須低於 5MA，且低於 20MA 的 80%
                 if vol_ma5 <= 1500 or vol_today >= vol_ma5 or vol_today >= vol_ma20_today * 0.8: return None
                 
                 ma5, ma10, ma20, ma60 = hist['MA5'], hist['MA10'], hist['MA20'], hist['MA60']
@@ -312,7 +310,8 @@ with tab1:
 
             progress_bar1, status_text1 = st.progress(0), st.empty()
             
-            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            # 🔴 穩定降載：降為 4 避免伺服器 RuntimeError
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
                 futures = {executor.submit(quick_scan_strict, sid): sid for sid in all_sids}
                 completed = 0
                 for f in concurrent.futures.as_completed(futures):
@@ -365,7 +364,6 @@ with tab2:
                 vol_ma5, vol_ma20 = vol.rolling(5).mean().iloc[-1], vol.rolling(20).mean()
                 ma5, ma10, ma60, rsi = hist['MA5'], hist['MA10'], hist['MA60'], round(hist['RSI'].iloc[-1], 1)
                 
-                # 舊版條件
                 if vol_ma5 <= 1500 or vol_today >= vol_ma5 or curr_price <= ma60.iloc[-1] or ma60.iloc[-1] <= ma60.iloc[-2] or not (50 <= rsi <= 65): return None 
                 
                 bias_ma5, bias_ma10 = (curr_price - ma5.iloc[-1]) / ma5.iloc[-1], (curr_price - ma10.iloc[-1]) / ma10.iloc[-1]
@@ -385,7 +383,9 @@ with tab2:
                 return None
 
             progress_bar2, status_text2 = st.progress(0), st.empty()
-            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            
+            # 🔴 穩定降載：降為 4 避免伺服器 RuntimeError
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
                 futures = {executor.submit(quick_scan_basic, row): row for _, row in filtered_stocks.iterrows()}
                 completed = 0
                 for f in concurrent.futures.as_completed(futures):
